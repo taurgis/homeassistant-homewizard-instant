@@ -23,6 +23,7 @@ class HomeWizardEntity(CoordinatorEntity[HWEnergyDeviceUpdateCoordinator]):
             sw_version=coordinator.data.device.firmware_version,
             model_id=coordinator.data.device.product_type,
             model=f"{coordinator.data.device.model_name} (Instant)",
+            serial_number=coordinator.data.device.serial,
         )
 
         if (serial_number := coordinator.data.device.serial) is not None:
