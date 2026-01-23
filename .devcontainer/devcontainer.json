@@ -31,6 +31,6 @@
     }
   },
   "mounts": [
-    "type=bind,source=${localWorkspaceFolder}/config/custom_components,target=/config/custom_components,consistency=cached"
+    "type=bind,source=${localWorkspaceFolder}/custom_components,target=/config/custom_components,consistency=cached"
   ]
 }
