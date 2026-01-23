@@ -1,0 +1,51 @@
+{
+  "entity": {
+    "sensor": {
+      "active_tariff": {
+        "default": "mdi:calendar-clock"
+      },
+      "any_power_fail_count": {
+        "default": "mdi:transmission-tower-off"
+      },
+      "dsmr_version": {
+        "default": "mdi:counter"
+      },
+      "gas_unique_id": {
+        "default": "mdi:alphabetical-variant"
+      },
+      "long_power_fail_count": {
+        "default": "mdi:transmission-tower-off"
+      },
+      "meter_model": {
+        "default": "mdi:gauge"
+      },
+      "unique_meter_id": {
+        "default": "mdi:alphabetical-variant"
+      },
+      "voltage_sag_l1_count": {
+        "default": "mdi:alert"
+      },
+      "voltage_sag_l2_count": {
+        "default": "mdi:alert"
+      },
+      "voltage_sag_l3_count": {
+        "default": "mdi:alert"
+      },
+      "voltage_swell_l1_count": {
+        "default": "mdi:alert"
+      },
+      "voltage_swell_l2_count": {
+        "default": "mdi:alert"
+      },
+      "voltage_swell_l3_count": {
+        "default": "mdi:alert"
+      },
+      "wifi_ssid": {
+        "default": "mdi:wifi"
+      },
+      "wifi_strength": {
+        "default": "mdi:wifi"
+      }
+    }
+  }
+}
