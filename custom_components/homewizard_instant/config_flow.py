@@ -15,7 +15,10 @@ from homeassistant.components import onboarding
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_IP_ADDRESS
 from homeassistant.data_entry_flow import AbortFlow
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from aiohttp import ClientSession
 from homeassistant.helpers.selector import TextSelector
 from homeassistant.components.dhcp import DhcpServiceInfo
 from homeassistant.components.zeroconf import ZeroconfServiceInfo
@@ -43,7 +46,7 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] | None = None
         if user_input is not None:
             try:
-                device_info = await async_try_connect(user_input[CONF_IP_ADDRESS])
+                device_info = await async_try_connect(self.hass, user_input[CONF_IP_ADDRESS])
             except RecoverableError as ex:
                 LOGGER.error(ex)
                 errors = {"base": ex.error_code}
@@ -112,7 +115,7 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
         This flow is triggered only by DHCP discovery of known devices.
         """
         try:
-            device = await async_try_connect(discovery_info.ip)
+            device = await async_try_connect(self.hass, discovery_info.ip)
         except RecoverableError as ex:
             LOGGER.error(ex)
             return self.async_abort(reason="unknown")
@@ -121,8 +124,11 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
         if device.product_type not in SUPPORTED_PRODUCT_TYPES:
             return self.async_abort(reason="device_not_supported")
 
+        if device.serial is None:
+            return self.async_abort(reason="unknown")
+
         await self.async_set_unique_id(
-            f"{DOMAIN}_{device.product_type}_{discovery_info.macaddress}"
+            f"{DOMAIN}_{device.product_type}_{device.serial}"
         )
 
         self._abort_if_unique_id_configured(
@@ -146,7 +152,7 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] | None = None
         if user_input is not None or not onboarding.async_is_onboarded(self.hass):
             try:
-                await async_try_connect(self.ip_address)
+                await async_try_connect(self.hass, self.ip_address)
             except RecoverableError as ex:
                 LOGGER.error(ex)
                 errors = {"base": ex.error_code}
@@ -186,7 +192,7 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             reauth_entry = self._get_reauth_entry()
             try:
-                await async_try_connect(reauth_entry.data[CONF_IP_ADDRESS])
+                await async_try_connect(self.hass, reauth_entry.data[CONF_IP_ADDRESS])
             except RecoverableError as ex:
                 LOGGER.error(ex)
                 errors = {"base": ex.error_code}
@@ -205,7 +211,7 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
 
         if user_input:
             try:
-                device_info = await async_try_connect(user_input[CONF_IP_ADDRESS])
+                device_info = await async_try_connect(self.hass, user_input[CONF_IP_ADDRESS])
             except RecoverableError as ex:
                 LOGGER.error(ex)
                 errors = {"base": ex.error_code}
@@ -235,14 +241,21 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
 
-async def async_try_connect(ip_address: str) -> Device:
+async def async_try_connect(
+    hass: HomeAssistant,
+    ip_address: str,
+    clientsession: ClientSession | None = None,
+) -> Device:
     """Try to connect.
 
     Make connection with device to test the connection
     and to get info for unique_id.
     """
 
-    energy_api = HomeWizardEnergyV1(ip_address)
+    energy_api = HomeWizardEnergyV1(
+        ip_address,
+        clientsession=clientsession or async_get_clientsession(hass),
+    )
 
     try:
         return await energy_api.device()

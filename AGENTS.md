@@ -103,3 +103,4 @@ External devices (gas/water/heat meters):
 
 - After code modifications, run the relevant linting and tests configured for this repository.
 - If no automated checks are configured, note this explicitly and perform a focused manual verification (e.g., start the dev instance and confirm logs).
+- Always run tests, linting, and type checks after every modification.

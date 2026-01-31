@@ -5,12 +5,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Final
+from typing import Final, TYPE_CHECKING, cast
 
 from homewizard_energy.models import CombinedModels, ExternalDevice
 
+from homeassistant.components import sensor as sensor_platform
 from homeassistant.components.sensor import (
-    DEVICE_CLASS_UNITS,
     SensorDeviceClass,
     SensorEntity,
     SensorEntityDescription,
@@ -32,12 +32,23 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
-try:
-    from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
-except ImportError:  # pragma: no cover - fallback for older HA versions
+if TYPE_CHECKING:
     from homeassistant.helpers.entity_platform import (
         AddEntitiesCallback as AddConfigEntryEntitiesCallback,
     )
+else:
+    try:
+        from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+    except ImportError:  # pragma: no cover - fallback for older HA versions
+        from homeassistant.helpers.entity_platform import (
+            AddEntitiesCallback as AddConfigEntryEntitiesCallback,
+        )
+
+
+SENSOR_DEVICE_CLASS_UNITS = cast(
+    "dict[SensorDeviceClass, set[str]]",
+    getattr(sensor_platform, "DEVICE_CLASS_UNITS"),
+)
 from homeassistant.helpers.typing import StateType
 from homeassistant.util.dt import utcnow
 from homeassistant.util.variance import ignore_variance
@@ -672,7 +683,7 @@ async def async_setup_entry(
     """Initialize sensors."""
 
     # Initialize default sensors
-    entities: list = [
+    entities: list[SensorEntity] = [
         HomeWizardSensorEntity(entry.runtime_data, description)
         for description in SENSORS
         if description.has_fn(entry.runtime_data.data)
@@ -739,7 +750,7 @@ class HomeWizardExternalSensorEntity(HomeWizardEntity, SensorEntity):
         self._suggested_device_class = description.suggested_device_class
         self._attr_unique_id = f"{DOMAIN}_{device_unique_id}"
         self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, device_unique_id)},
+            identifiers={(DOMAIN, f"{DOMAIN}_{device_unique_id}")},
             name=description.device_name,
             manufacturer="HomeWizard",
             model=coordinator.data.device.product_type,
@@ -748,7 +759,7 @@ class HomeWizardExternalSensorEntity(HomeWizardEntity, SensorEntity):
         if coordinator.data.device.serial is not None:
             self._attr_device_info[ATTR_VIA_DEVICE] = (
                 DOMAIN,
-                coordinator.data.device.serial,
+                f"{DOMAIN}_{coordinator.data.device.serial}",
             )
 
     @property
@@ -787,7 +798,7 @@ class HomeWizardExternalSensorEntity(HomeWizardEntity, SensorEntity):
         """Validate unit of measurement and set device class."""
         if (
             self.native_unit_of_measurement
-            not in DEVICE_CLASS_UNITS[self._suggested_device_class]
+            not in SENSOR_DEVICE_CLASS_UNITS[self._suggested_device_class]
         ):
             return None
 

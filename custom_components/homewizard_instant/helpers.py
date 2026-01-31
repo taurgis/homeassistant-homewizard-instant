@@ -24,7 +24,7 @@ def homewizard_exception_handler[_HomeWizardEntityT: HomeWizardEntity, **_P](
     """
 
     async def handler(
-        self: _HomeWizardEntityT, *args: _P.args, **kwargs: _P.kwargs
+        self: _HomeWizardEntityT, /, *args: _P.args, **kwargs: _P.kwargs
     ) -> None:
         try:
             await func(self, *args, **kwargs)
