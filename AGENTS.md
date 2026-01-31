@@ -34,6 +34,20 @@ This integration explicitly supports a “Local API disabled” recovery path.
 - `DisabledError` triggers a config entry reload and starts re-auth to guide the user to re-enable the API.
 - Do not turn expected connectivity failures into noisy stack traces.
 
+### 5) Home Assistant integration contract
+- Config/UI-first: no new YAML setup; keep config/reauth/reconfigure in `config_flow.py`.
+- Unique IDs must stay stable and **DOMAIN-prefixed** to avoid collisions with the official integration.
+- User-facing text lives in `strings.json` and mirrors to `translations/en.json`.
+- Entity classes should set `_attr_has_entity_name = True` when appropriate and expose `device_info` for proper grouping.
+- Use `EntityDescription` dataclasses for declarative sensor definitions.
+- Loading must be async and non-blocking; any sync work belongs in executor jobs.
+- Use `entry.async_on_unload()` for cleanup callbacks.
+
+## Discovery and IP changes
+
+- DHCP discovery updates existing entries with new IPs.
+- Unknown devices should abort discovery; do not add fallback discovery inside coordinator updates.
+
 ## Code map (where to implement changes)
 
 | Concern | File | Notes |
@@ -58,6 +72,17 @@ External devices (gas/water/heat meters):
 - Use `EXTERNAL_SENSORS` and `HomeWizardExternalSensorEntity`.
 - Unit mapping: API may return `m3`; normalize to `UnitOfVolume.CUBIC_METERS`.
 
+## Testing and QA expectations (lightweight)
+- Prefer pytest + `pytest-homeassistant-custom-component` for new tests.
+- Mock the HomeWizard API client; never hit real devices in tests.
+- Cover config flow failures: cannot_connect, invalid_auth/invalid_discovery_info, already_configured.
+- Mark coordinator failures with `UpdateFailed` to surface entity unavailability.
+
+## Services and actions
+
+- This integration does not register services or actions.
+- Keep it that way unless explicitly requested; add idempotent registration if services are introduced.
+
 ## Polling interval
 
 - The update interval is hard-coded in `custom_components/homewizard_instant/const.py` as `UPDATE_INTERVAL = timedelta(seconds=1)`.
@@ -73,3 +98,8 @@ External devices (gas/water/heat meters):
 
 - Use the VS Code task "Start Home Assistant" to run a dev instance.
 - When troubleshooting, check Home Assistant logs for `homewizard_instant` messages.
+
+## Verification after changes
+
+- After code modifications, run the relevant linting and tests configured for this repository.
+- If no automated checks are configured, note this explicitly and perform a focused manual verification (e.g., start the dev instance and confirm logs).
