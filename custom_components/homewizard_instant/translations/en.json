@@ -42,6 +42,14 @@
       }
     }
   },
+  "exceptions": {
+    "communication_error": {
+      "message": "Failed to communicate with the device. Check the IP address and network connectivity."
+    },
+    "api_disabled": {
+      "message": "The local API is disabled. Enable it in the HomeWizard app and try again."
+    }
+  },
   "entity": {
     "sensor": {
       "active_apparent_power_phase_va": {
