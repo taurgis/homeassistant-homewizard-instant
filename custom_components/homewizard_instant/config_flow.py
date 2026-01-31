@@ -55,6 +55,9 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
                 if device_info.product_type not in SUPPORTED_PRODUCT_TYPES:
                     return self.async_abort(reason="device_not_supported")
 
+                if device_info.serial is None:
+                    return self.async_abort(reason="unknown_error")
+
                 await self.async_set_unique_id(
                     f"{DOMAIN}_{device_info.product_type}_{device_info.serial}"
                 )
@@ -216,6 +219,9 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
                 LOGGER.error(ex)
                 errors = {"base": ex.error_code}
             else:
+                if device_info.serial is None:
+                    return self.async_abort(reason="unknown_error")
+
                 await self.async_set_unique_id(
                     f"{DOMAIN}_{device_info.product_type}_{device_info.serial}"
                 )

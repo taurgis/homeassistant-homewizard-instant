@@ -31,6 +31,7 @@
     }
   },
   "mounts": [
+    "type=bind,source=${localWorkspaceFolder}/.devcontainer/ha_config,target=/config,consistency=cached",
     "type=bind,source=${localWorkspaceFolder}/custom_components,target=/config/custom_components,consistency=cached"
   ]
 }

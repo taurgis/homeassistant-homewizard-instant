@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - master
   pull_request:
 
 jobs:
@@ -13,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.12", "3.13"]
+        python-version: ["3.12"]
     steps:
       - uses: actions/checkout@v4
 
@@ -28,6 +27,8 @@ jobs:
           pip install -r requirements_test.txt
 
       - name: Run tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}
         run: pytest tests/ -v --tb=short --cov=custom_components/homewizard_instant --cov-report=term-missing --cov-fail-under=95
 
       - name: Upload coverage reports

@@ -121,6 +121,26 @@ async def test_user_flow_success(hass, mock_device_info) -> None:
     assert result2["data"] == {CONF_IP_ADDRESS: "1.2.3.4"}
 
 
+async def test_user_flow_missing_serial_aborts(hass, mock_device_info) -> None:
+    """Test user flow aborts when serial is missing."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
+
+    mock_device_info.serial = None
+
+    with patch(
+        "custom_components.homewizard_instant.config_flow.async_try_connect",
+        return_value=mock_device_info,
+    ):
+        result2 = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_IP_ADDRESS: "1.2.3.4"}
+        )
+
+    assert result2["type"] == FlowResultType.ABORT
+    assert result2["reason"] == "unknown_error"
+
+
 async def test_user_flow_device_not_supported(hass) -> None:
     """Test user flow aborts for unsupported device."""
     result = await hass.config_entries.flow.async_init(
@@ -402,6 +422,36 @@ async def test_reconfigure_flow_wrong_device(hass, mock_config_entry):
 
     assert result2["type"] == FlowResultType.ABORT
     assert result2["reason"] == "wrong_device"
+
+
+async def test_reconfigure_flow_missing_serial_aborts(
+    hass, mock_config_entry
+) -> None:
+    """Test reconfigure flow aborts when serial is missing."""
+    mock_config_entry.add_to_hass(hass)
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": "reconfigure", "entry_id": mock_config_entry.entry_id},
+        data=None,
+    )
+
+    device_info = SimpleNamespace(
+        product_type="P1",
+        product_name="P1 Meter",
+        serial=None,
+    )
+
+    with patch(
+        "custom_components.homewizard_instant.config_flow.async_try_connect",
+        return_value=device_info,
+    ):
+        result2 = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_IP_ADDRESS: "2.3.4.5"}
+        )
+
+    assert result2["type"] == FlowResultType.ABORT
+    assert result2["reason"] == "unknown_error"
 
 
 async def test_dhcp_unknown_device(hass) -> None:

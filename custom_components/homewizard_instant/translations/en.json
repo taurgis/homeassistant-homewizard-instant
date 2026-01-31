@@ -50,6 +50,12 @@
       "message": "The local API is disabled. Enable it in the HomeWizard app and try again."
     }
   },
+  "issues": {
+    "local_api_disabled": {
+      "title": "Local API is disabled",
+      "description": "The local API is disabled. Go to the HomeWizard app and enable the API in the device settings."
+    }
+  },
   "entity": {
     "sensor": {
       "active_apparent_power_phase_va": {
@@ -139,14 +145,6 @@
       "inlet_heat_meter": {
         "name": "Inlet heat meter"
       }
-    }
-  },
-  "exceptions": {
-    "api_disabled": {
-      "message": "The local API is disabled."
-    },
-    "communication_error": {
-      "message": "An error occurred while communicating with your HomeWizard device"
     }
   }
 }

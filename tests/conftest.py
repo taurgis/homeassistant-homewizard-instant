@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+
+import sys
 
 import pytest
 from homewizard_energy.const import Model
@@ -12,6 +15,8 @@ from homewizard_energy.models import ExternalDevice
 
 from homeassistant.const import CONF_IP_ADDRESS
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from custom_components.homewizard_instant.const import DOMAIN
 

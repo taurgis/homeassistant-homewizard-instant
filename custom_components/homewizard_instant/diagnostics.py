@@ -57,7 +57,12 @@ async def async_get_config_entry_diagnostics(
 
     return async_redact_data(
         {
-            "entry": async_redact_data(entry.data, TO_REDACT),
+            "entry": {
+                "data": async_redact_data(entry.data, TO_REDACT),
+                "options": async_redact_data(entry.options, TO_REDACT),
+                "title": entry.title,
+                "unique_id": entry.unique_id,
+            },
             "data": _serialize_data(data),
         },
         TO_REDACT,

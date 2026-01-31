@@ -8,6 +8,7 @@ from homewizard_energy.models import CombinedModels as DeviceResponseEntry
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import DOMAIN, LOGGER, UPDATE_INTERVAL
@@ -53,9 +54,19 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
             if not self.api_disabled:
                 self.api_disabled = True
 
+                ir.async_create_issue(
+                    self.hass,
+                    DOMAIN,
+                    "local_api_disabled",
+                    is_fixable=True,
+                    severity=ir.IssueSeverity.ERROR,
+                    translation_key="local_api_disabled",
+                    data={"entry_id": self.config_entry.entry_id},
+                )
+
                 # Do not reload when performing first refresh
                 if self.data is not None:
-                    # Reload config entry to let init flow handle retrying and trigger repair flow
+                    # Reload config entry to let init flow handle retrying and trigger reauth
                     self.hass.config_entries.async_schedule_reload(
                         self.config_entry.entry_id
                     )
@@ -65,6 +76,7 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
             ) from ex
 
         self.api_disabled = False
+        ir.async_delete_issue(self.hass, DOMAIN, "local_api_disabled")
 
         self.data = data
         return data

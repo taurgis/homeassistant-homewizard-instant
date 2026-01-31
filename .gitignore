@@ -26,3 +26,4 @@ htmlcov/
 build/
 dist/
 *.egg-info/
+.devcontainer/ha_config/*

@@ -20,6 +20,9 @@ async def test_async_get_config_entry_diagnostics_redacts(
 ):
     """Test diagnostics redacts sensitive fields."""
     mock_config_entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(
+        mock_config_entry, options={"token": "secret", CONF_IP_ADDRESS: "5.6.7.8"}
+    )
 
     coordinator = HWEnergyDeviceUpdateCoordinator(
         hass, mock_config_entry, api=AsyncMock()
@@ -29,7 +32,10 @@ async def test_async_get_config_entry_diagnostics_redacts(
 
     diagnostics = await async_get_config_entry_diagnostics(hass, mock_config_entry)
 
-    assert diagnostics["entry"][CONF_IP_ADDRESS] == "**REDACTED**"
+    assert diagnostics["entry"]["data"][CONF_IP_ADDRESS] == "**REDACTED**"
+    assert diagnostics["entry"]["options"][CONF_IP_ADDRESS] == "**REDACTED**"
+    assert diagnostics["entry"]["options"]["token"] == "**REDACTED**"
+    assert diagnostics["entry"]["unique_id"] == "**REDACTED**"
     assert diagnostics["data"]["device"]["serial"] == "**REDACTED**"
 
 

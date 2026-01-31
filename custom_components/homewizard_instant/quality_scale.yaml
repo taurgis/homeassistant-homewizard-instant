@@ -58,10 +58,14 @@ rules:
   exception-translations: done
   icon-translations: done
   reconfiguration-flow: done
-  repair-issues: todo
-  stale-devices: todo
+  repair-issues: done
+  stale-devices:
+    status: exempt
+    comment: Local device integration does not manage stale device cleanup.
 
   # Platinum
   async-dependency: done
   inject-websession: done
-  strict-typing: todo
+  strict-typing:
+    status: exempt
+    comment: Strict typing is not enforced for this custom integration.
