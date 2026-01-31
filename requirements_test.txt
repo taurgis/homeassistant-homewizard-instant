@@ -1,0 +1,12 @@
+pytest==8.3.3
+pytest-asyncio==0.24.0
+pytest-homeassistant-custom-component>=0.13.190
+syrupy>=4.6.0
+freezegun>=1.4.0
+ruff>=0.6.9
+mypy>=1.11.2
+pytest-cov
+python-homewizard-energy==10.0.1
+zeroconf
+aiodhcpwatcher
+aiodiscover
