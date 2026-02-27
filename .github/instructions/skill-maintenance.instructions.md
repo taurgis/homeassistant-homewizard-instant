@@ -1,6 +1,6 @@
 ---
 description: 'Require skill-authoring workflow for substantive skill updates'
-applyTo: '.agent/skills/**,.github/skills/**'
+applyTo: '**'
 ---
 
 # Skill Maintenance Requirement
