@@ -25,7 +25,11 @@ async def test_async_get_config_entry_diagnostics_redacts(
     )
 
     coordinator = HWEnergyDeviceUpdateCoordinator(
-        hass, mock_config_entry, api=AsyncMock()
+        hass,
+        mock_config_entry,
+        api=AsyncMock(),
+        clientsession=AsyncMock(),
+        ws_token=None,
     )
     coordinator.data = mock_combined_data
     mock_config_entry.runtime_data = coordinator

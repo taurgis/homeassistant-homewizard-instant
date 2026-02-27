@@ -8,8 +8,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from homewizard_energy.const import Model
+from homewizard_energy.errors import UnauthorizedError
 
-from homeassistant.const import CONF_IP_ADDRESS
+from homeassistant.const import CONF_IP_ADDRESS, CONF_TOKEN
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.components.dhcp import DhcpServiceInfo
 from homeassistant.components.zeroconf import ZeroconfServiceInfo
@@ -23,6 +24,16 @@ from custom_components.homewizard_instant.const import (
     CONF_SERIAL,
     DOMAIN,
 )
+
+
+@pytest.fixture(autouse=True)
+def mock_has_v2_api_false() -> None:
+    """Default tests to v1 behavior unless explicitly overridden."""
+    with patch(
+        "custom_components.homewizard_instant.config_flow.has_v2_api",
+        new=AsyncMock(return_value=False),
+    ):
+        yield
 
 
 async def test_async_try_connect_success(hass, mock_device_info) -> None:
@@ -76,6 +87,30 @@ async def test_async_try_connect_request_error(hass) -> None:
             await async_try_connect(hass, "1.2.3.4", clientsession=AsyncMock())
 
     assert err.value.error_code == "network_error"
+    mock_api.close.assert_awaited_once()
+
+
+async def test_async_try_connect_unauthorized_error(hass) -> None:
+    """Test async_try_connect propagates UnauthorizedError for v2 devices."""
+    from homewizard_energy.errors import UnauthorizedError
+
+    mock_api = AsyncMock()
+    mock_api.device = AsyncMock(side_effect=UnauthorizedError("unauthorized"))
+    mock_api.close = AsyncMock()
+
+    with (
+        patch(
+            "custom_components.homewizard_instant.config_flow.has_v2_api",
+            new=AsyncMock(return_value=True),
+        ),
+        patch(
+            "custom_components.homewizard_instant.config_flow.HomeWizardEnergyV2",
+            return_value=mock_api,
+        ),
+    ):
+        with pytest.raises(UnauthorizedError):
+            await async_try_connect(hass, "1.2.3.4", clientsession=AsyncMock())
+
     mock_api.close.assert_awaited_once()
 
 
@@ -181,6 +216,75 @@ async def test_user_flow_recoverable_error(hass) -> None:
 
     assert result2["type"] == FlowResultType.FORM
     assert result2["errors"] == {"base": "network_error"}
+
+
+async def test_user_flow_unauthorized_shows_authorize_step(hass) -> None:
+    """Test user flow routes to authorize step on v2 unauthorized."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
+
+    with (
+        patch(
+            "custom_components.homewizard_instant.config_flow.async_try_connect",
+            side_effect=UnauthorizedError("unauthorized"),
+        ),
+        patch(
+            "custom_components.homewizard_instant.config_flow.async_request_token",
+            new=AsyncMock(return_value=None),
+        ),
+    ):
+        result2 = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_IP_ADDRESS: "1.2.3.4"}
+        )
+
+    assert result2["type"] == FlowResultType.FORM
+    assert result2["step_id"] == "authorize"
+
+
+async def test_authorize_step_success_creates_entry(hass, mock_device_info) -> None:
+    """Test authorize step creates entry with a v2 token."""
+    with patch(
+        "custom_components.homewizard_instant.async_setup_entry",
+        new=AsyncMock(return_value=True),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": "user"}
+        )
+
+        with (
+            patch(
+                "custom_components.homewizard_instant.config_flow.async_try_connect",
+                side_effect=UnauthorizedError("unauthorized"),
+            ),
+            patch(
+                "custom_components.homewizard_instant.config_flow.async_request_token",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            authorize = await hass.config_entries.flow.async_configure(
+                result["flow_id"], {CONF_IP_ADDRESS: "1.2.3.4"}
+            )
+
+        with (
+            patch(
+                "custom_components.homewizard_instant.config_flow.async_request_token",
+                new=AsyncMock(return_value="token123"),
+            ),
+            patch(
+                "custom_components.homewizard_instant.config_flow.async_try_connect",
+                new=AsyncMock(return_value=mock_device_info),
+            ),
+        ):
+            result2 = await hass.config_entries.flow.async_configure(
+                authorize["flow_id"], {}
+            )
+
+    assert result2["type"] == FlowResultType.CREATE_ENTRY
+    assert result2["data"] == {
+        CONF_IP_ADDRESS: "1.2.3.4",
+        CONF_TOKEN: "token123",
+    }
 
 
 async def test_user_flow_already_configured(hass, mock_device_info) -> None:
@@ -396,6 +500,39 @@ async def test_reauth_flow_error(hass, mock_config_entry) -> None:
     assert result2["errors"] == {"base": "network_error"}
 
 
+async def test_reauth_flow_with_token_updates_token(hass) -> None:
+    """Test reauth flow updates v2 token when token exists in entry data."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_IP_ADDRESS: "1.2.3.4", CONF_TOKEN: "old-token"},
+        unique_id=f"{DOMAIN}_{Model.P1_METER}_SERIAL123",
+        title="P1 Meter",
+    )
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.homewizard_instant.config_flow.async_request_token",
+        new=AsyncMock(return_value=None),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN,
+            context={"source": "reauth", "entry_id": entry.entry_id},
+            data=entry.data,
+        )
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "reauth_confirm_update_token"
+
+    with patch(
+        "custom_components.homewizard_instant.config_flow.async_request_token",
+        new=AsyncMock(return_value="new-token"),
+    ):
+        result2 = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+
+    assert result2["type"] == FlowResultType.ABORT
+    assert result2["reason"] == "reauth_successful"
+
+
 async def test_reconfigure_flow_updates_entry(hass, mock_config_entry, mock_device_info):
     """Test reconfigure flow updates entry."""
     mock_config_entry.add_to_hass(hass)
@@ -538,6 +675,45 @@ async def test_dhcp_updates_existing_entry_ip(hass) -> None:
     assert result["type"] == FlowResultType.ABORT
     assert result["reason"] == "already_configured"
     assert entry.data[CONF_IP_ADDRESS] == "2.3.4.5"
+
+
+async def test_dhcp_uses_stored_token_for_v2_entry(hass) -> None:
+    """Test dhcp rediscovery passes stored token for matching v2 entries."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_IP_ADDRESS: "1.2.3.4", CONF_TOKEN: "token123"},
+        unique_id=f"{DOMAIN}_{Model.P1_METER}_AA:BB:CC:DD:EE:FF",
+    )
+    entry.add_to_hass(hass)
+
+    discovery_info = DhcpServiceInfo(
+        ip="2.3.4.5",
+        hostname="hw",
+        macaddress="AA:BB:CC:DD:EE:FF",
+    )
+
+    device_info = SimpleNamespace(
+        product_type=Model.P1_METER,
+        product_name="P1 Meter",
+        serial="AA:BB:CC:DD:EE:FF",
+    )
+
+    with patch(
+        "custom_components.homewizard_instant.config_flow.async_try_connect",
+        new=AsyncMock(return_value=device_info),
+    ) as try_connect:
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": "dhcp"}, data=discovery_info
+        )
+
+    assert result["type"] == FlowResultType.ABORT
+    assert result["reason"] == "already_configured"
+    assert entry.data[CONF_IP_ADDRESS] == "2.3.4.5"
+    try_connect.assert_awaited_once_with(
+        hass,
+        "2.3.4.5",
+        token="token123",
+    )
 
 
 async def test_dhcp_device_not_supported(hass) -> None:

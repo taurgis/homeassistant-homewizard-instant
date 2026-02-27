@@ -18,7 +18,11 @@ async def test_entity_device_info_identifiers(hass, mock_config_entry, mock_comb
     mock_config_entry.add_to_hass(hass)
 
     coordinator = HWEnergyDeviceUpdateCoordinator(
-        hass, mock_config_entry, api=AsyncMock()
+        hass,
+        mock_config_entry,
+        api=AsyncMock(),
+        clientsession=AsyncMock(),
+        ws_token=None,
     )
     coordinator.data = mock_combined_data
 
@@ -33,7 +37,11 @@ async def test_entity_device_info_connections(hass, mock_config_entry, mock_comb
     mock_config_entry.add_to_hass(hass)
 
     coordinator = HWEnergyDeviceUpdateCoordinator(
-        hass, mock_config_entry, api=AsyncMock()
+        hass,
+        mock_config_entry,
+        api=AsyncMock(),
+        clientsession=AsyncMock(),
+        ws_token=None,
     )
     coordinator.data = mock_combined_data
 

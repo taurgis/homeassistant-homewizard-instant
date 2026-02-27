@@ -10,16 +10,23 @@
       "wrong_device": "The configured device is not the same found on this IP address."
     },
     "error": {
+      "authorization_failed": "Authorization failed. Press the button on the HomeWizard and try again.",
       "api_not_enabled": "The local API is disabled. Go to the HomeWizard app and enable the API in the device settings.",
       "network_error": "Device unreachable, make sure that you have entered the correct IP address and that the device is available in your network"
     },
     "step": {
+      "authorize": {
+        "description": "Press the button on your HomeWizard device and then submit this form to authorize Home Assistant."
+      },
       "discovery_confirm": {
         "description": "Do you want to set up {product_type} ({serial}) at {ip_address}?",
         "title": "Confirm"
       },
       "reauth_enable_api": {
         "description": "The local API is disabled. Go to the HomeWizard app and enable the API in the device settings."
+      },
+      "reauth_confirm_update_token": {
+        "description": "Your HomeWizard authorization token is no longer valid. Press the button on the HomeWizard device and submit this form to get a new token."
       },
       "reconfigure": {
         "data": {
@@ -51,6 +58,23 @@
     }
   },
   "issues": {
+    "migrate_to_v2_api": {
+      "fix_flow": {
+        "error": {
+          "authorization_failed": "Authorization failed. Press the button on the HomeWizard and try again."
+        },
+        "step": {
+          "authorize": {
+            "description": "Press the button on your HomeWizard device and then submit this form to authorize Home Assistant."
+          },
+          "confirm": {
+            "description": "Your {title} now supports a more secure websocket authentication method. To migrate this integration to the v2 socket flow, select Submit and complete authorization.",
+            "title": "Update the authentication method"
+          }
+        }
+      },
+      "title": "Update the authentication method for {title}"
+    },
     "local_api_disabled": {
       "title": "Local API is disabled",
       "description": "The local API is disabled. Go to the HomeWizard app and enable the API in the device settings."

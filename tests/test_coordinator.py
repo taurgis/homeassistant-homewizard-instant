@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from homewizard_energy.errors import DisabledError, RequestError
 
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.issue_registry import IssueSeverity
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
@@ -23,7 +24,13 @@ async def test_coordinator_update_success(hass, mock_config_entry, mock_combined
     api = AsyncMock()
     api.combined = AsyncMock(return_value=mock_combined_data)
 
-    coordinator = HWEnergyDeviceUpdateCoordinator(hass, mock_config_entry, api)
+    coordinator = HWEnergyDeviceUpdateCoordinator(
+        hass,
+        mock_config_entry,
+        api,
+        clientsession=AsyncMock(),
+        ws_token=None,
+    )
 
     with patch(
         "custom_components.homewizard_instant.coordinator.ir.async_delete_issue"
@@ -43,7 +50,13 @@ async def test_coordinator_request_error(hass, mock_config_entry):
     api = AsyncMock()
     api.combined = AsyncMock(side_effect=RequestError("boom"))
 
-    coordinator = HWEnergyDeviceUpdateCoordinator(hass, mock_config_entry, api)
+    coordinator = HWEnergyDeviceUpdateCoordinator(
+        hass,
+        mock_config_entry,
+        api,
+        clientsession=AsyncMock(),
+        ws_token=None,
+    )
 
     with pytest.raises(UpdateFailed) as err:
         await coordinator._async_update_data()
@@ -60,7 +73,13 @@ async def test_coordinator_disabled_error_triggers_reload(
     api = AsyncMock()
     api.combined = AsyncMock(side_effect=DisabledError("disabled"))
 
-    coordinator = HWEnergyDeviceUpdateCoordinator(hass, mock_config_entry, api)
+    coordinator = HWEnergyDeviceUpdateCoordinator(
+        hass,
+        mock_config_entry,
+        api,
+        clientsession=AsyncMock(),
+        ws_token=None,
+    )
     coordinator.data = mock_combined_data
 
     hass.config_entries.async_schedule_reload = Mock()
@@ -79,3 +98,26 @@ async def test_coordinator_disabled_error_triggers_reload(
     hass.config_entries.async_schedule_reload.assert_called_once_with(
         mock_config_entry.entry_id
     )
+
+
+async def test_coordinator_unauthorized_error_raises_auth_failed(
+    hass, mock_config_entry
+):
+    """Test coordinator maps UnauthorizedError to ConfigEntryAuthFailed."""
+    from homewizard_energy.errors import UnauthorizedError
+
+    mock_config_entry.add_to_hass(hass)
+
+    api = AsyncMock()
+    api.combined = AsyncMock(side_effect=UnauthorizedError("unauthorized"))
+
+    coordinator = HWEnergyDeviceUpdateCoordinator(
+        hass,
+        mock_config_entry,
+        api,
+        clientsession=AsyncMock(),
+        ws_token=None,
+    )
+
+    with pytest.raises(ConfigEntryAuthFailed):
+        await coordinator._async_update_data()

@@ -27,7 +27,11 @@ async def test_async_setup_entry_adds_entities(hass, mock_config_entry, mock_com
     mock_config_entry.add_to_hass(hass)
 
     coordinator = HWEnergyDeviceUpdateCoordinator(
-        hass, mock_config_entry, api=AsyncMock()
+        hass,
+        mock_config_entry,
+        api=AsyncMock(),
+        clientsession=AsyncMock(),
+        ws_token=None,
     )
     coordinator.data = mock_combined_data
 
@@ -50,7 +54,11 @@ async def test_sensor_entity_enabled_default(hass, mock_config_entry, mock_combi
     mock_config_entry.add_to_hass(hass)
 
     coordinator = HWEnergyDeviceUpdateCoordinator(
-        hass, mock_config_entry, api=AsyncMock()
+        hass,
+        mock_config_entry,
+        api=AsyncMock(),
+        clientsession=AsyncMock(),
+        ws_token=None,
     )
     coordinator.data = mock_combined_data
 
@@ -68,7 +76,11 @@ async def test_sensor_entity_available(hass, mock_config_entry, mock_combined_da
     mock_config_entry.add_to_hass(hass)
 
     coordinator = HWEnergyDeviceUpdateCoordinator(
-        hass, mock_config_entry, api=AsyncMock()
+        hass,
+        mock_config_entry,
+        api=AsyncMock(),
+        clientsession=AsyncMock(),
+        ws_token=None,
     )
     coordinator.data = mock_combined_data
     coordinator.data.measurement.power_w = None
@@ -87,7 +99,11 @@ async def test_external_sensor_unit_and_device_class(
     mock_config_entry.add_to_hass(hass)
 
     coordinator = HWEnergyDeviceUpdateCoordinator(
-        hass, mock_config_entry, api=AsyncMock()
+        hass,
+        mock_config_entry,
+        api=AsyncMock(),
+        clientsession=AsyncMock(),
+        ws_token=None,
     )
     coordinator.data = mock_combined_data
 
@@ -120,7 +136,11 @@ async def test_external_sensor_no_device(hass, mock_config_entry, mock_combined_
     mock_config_entry.add_to_hass(hass)
 
     coordinator = HWEnergyDeviceUpdateCoordinator(
-        hass, mock_config_entry, api=AsyncMock()
+        hass,
+        mock_config_entry,
+        api=AsyncMock(),
+        clientsession=AsyncMock(),
+        ws_token=None,
     )
     coordinator.data = mock_combined_data
     coordinator.data.measurement.external_devices = None
@@ -144,7 +164,11 @@ async def test_external_sensor_missing_device_key(hass, mock_config_entry, mock_
     mock_config_entry.add_to_hass(hass)
 
     coordinator = HWEnergyDeviceUpdateCoordinator(
-        hass, mock_config_entry, api=AsyncMock()
+        hass,
+        mock_config_entry,
+        api=AsyncMock(),
+        clientsession=AsyncMock(),
+        ws_token=None,
     )
     coordinator.data = mock_combined_data
 
@@ -170,7 +194,11 @@ async def test_import_tariff_t1_sensor_does_not_depend_on_export_t2(
     mock_config_entry.add_to_hass(hass)
 
     coordinator = HWEnergyDeviceUpdateCoordinator(
-        hass, mock_config_entry, api=AsyncMock()
+        hass,
+        mock_config_entry,
+        api=AsyncMock(),
+        clientsession=AsyncMock(),
+        ws_token=None,
     )
     coordinator.data = mock_combined_data
     coordinator.data.measurement.energy_import_t1_kwh = 2.0
