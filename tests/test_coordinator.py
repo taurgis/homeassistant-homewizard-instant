@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from time import monotonic
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -121,3 +123,121 @@ async def test_coordinator_unauthorized_error_raises_auth_failed(
 
     with pytest.raises(ConfigEntryAuthFailed):
         await coordinator._async_update_data()
+
+
+async def test_coordinator_skips_poll_fetch_when_websocket_is_healthy(
+    hass, mock_config_entry, mock_combined_data
+):
+    """Test poll refresh is skipped while websocket updates are active."""
+    mock_config_entry.add_to_hass(hass)
+
+    api = AsyncMock()
+    api.combined = AsyncMock(return_value=mock_combined_data)
+
+    coordinator = HWEnergyDeviceUpdateCoordinator(
+        hass,
+        mock_config_entry,
+        api,
+        clientsession=AsyncMock(),
+        ws_token="token123",
+    )
+    coordinator.data = mock_combined_data
+    coordinator._ws_connected = True
+    coordinator._last_ws_refresh = monotonic()
+
+    data = await coordinator._async_update_data()
+
+    assert data == mock_combined_data
+    api.combined.assert_not_awaited()
+
+
+async def test_websocket_refresh_coalesces_overlapping_events(
+    hass, mock_config_entry, mock_combined_data
+):
+    """Test overlapping websocket events coalesce to one extra refresh."""
+    mock_config_entry.add_to_hass(hass)
+
+    api = AsyncMock()
+    coordinator = HWEnergyDeviceUpdateCoordinator(
+        hass,
+        mock_config_entry,
+        api,
+        clientsession=AsyncMock(),
+        ws_token="token123",
+    )
+
+    started = asyncio.Event()
+    release_first = asyncio.Event()
+    call_count = 0
+
+    async def fake_fetch():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            started.set()
+            await release_first.wait()
+        return mock_combined_data
+
+    coordinator._async_fetch_combined_data = AsyncMock(side_effect=fake_fetch)
+    coordinator.async_set_updated_data = Mock()
+
+    task_first = asyncio.create_task(
+        coordinator._async_refresh_from_websocket("measurement")
+    )
+    await started.wait()
+
+    task_second = asyncio.create_task(
+        coordinator._async_refresh_from_websocket("measurement")
+    )
+    await asyncio.sleep(0)
+    assert coordinator._ws_refresh_pending is True
+
+    release_first.set()
+    await asyncio.gather(task_first, task_second)
+
+    assert call_count == 2
+    assert coordinator.async_set_updated_data.call_count == 2
+
+
+async def test_ws_ssl_context_uses_hostname_verification_for_dns_host(
+    hass, mock_config_entry
+):
+    """Test websocket SSL context checks hostname when using DNS hostnames."""
+    mock_config_entry.add_to_hass(hass)
+
+    api = AsyncMock()
+    api.host = "homewizard.local"
+
+    coordinator = HWEnergyDeviceUpdateCoordinator(
+        hass,
+        mock_config_entry,
+        api,
+        clientsession=AsyncMock(),
+        ws_token="token123",
+    )
+
+    context = await coordinator._async_get_ws_ssl_context()
+
+    assert context.check_hostname is True
+
+
+async def test_ws_ssl_context_disables_hostname_verification_for_ip_host(
+    hass, mock_config_entry
+):
+    """Test websocket SSL context disables hostname checks for IP endpoints."""
+    mock_config_entry.add_to_hass(hass)
+
+    api = AsyncMock()
+    api.host = "1.2.3.4"
+
+    coordinator = HWEnergyDeviceUpdateCoordinator(
+        hass,
+        mock_config_entry,
+        api,
+        clientsession=AsyncMock(),
+        ws_token="token123",
+    )
+
+    context = await coordinator._async_get_ws_ssl_context()
+
+    assert context.check_hostname is False

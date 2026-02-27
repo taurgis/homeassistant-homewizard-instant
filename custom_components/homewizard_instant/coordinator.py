@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from ipaddress import ip_address
 import json
 import random
 import ssl
 from time import monotonic
 
-from aiohttp import ClientSession, ClientWebSocketResponse, WSMessage, WSMsgType
+from aiohttp import ClientError, ClientSession, ClientWebSocketResponse, WSMessage, WSMsgType
 from homewizard_energy import HomeWizardEnergy
 from homewizard_energy.errors import DisabledError, RequestError, UnauthorizedError
 from homewizard_energy.models import CombinedModels as DeviceResponseEntry
@@ -30,7 +31,8 @@ WS_AUTH_TIMEOUT = 40
 WS_RECEIVE_TIMEOUT = 90
 WS_INITIAL_RETRY_DELAY = 1.0
 WS_MAX_RETRY_DELAY = 60.0
-WS_MIN_REFRESH_GAP_SECONDS = 0.5
+WS_MIN_REFRESH_GAP_SECONDS = 0.0
+WS_ACTIVITY_STALE_SECONDS = 10.0
 WS_SUBSCRIPTIONS = ("measurement", "device", "system", "batteries")
 WS_REFRESH_EVENTS = frozenset({"measurement", "device", "system", "batteries"})
 STATS_WINDOW_SECONDS = 60.0
@@ -75,6 +77,8 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
         self._poll_update_timestamps: deque[float] = deque()
         self._ws_update_timestamps: deque[float] = deque()
         self._ws_message_timestamps: deque[float] = deque()
+        self._ws_refresh_lock = asyncio.Lock()
+        self._ws_refresh_pending = False
 
     @property
     def websocket_enabled(self) -> bool:
@@ -105,10 +109,24 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
 
     async def _async_update_data(self) -> DeviceResponseEntry:
         """Fetch all device and sensor data from api."""
+        if self.data is not None and self._websocket_is_realtime_active():
+            return self.data
+
         data = await self._async_fetch_combined_data()
         self._record_poll_update()
         self.data = data
         return data
+
+    def _websocket_is_realtime_active(self) -> bool:
+        """Return True when websocket updates are currently healthy."""
+        if not self._ws_connected:
+            return False
+
+        last_activity = max(self._last_ws_event, self._last_ws_refresh)
+        if last_activity == 0:
+            return False
+
+        return monotonic() - last_activity < WS_ACTIVITY_STALE_SECONDS
 
     async def _async_fetch_combined_data(self) -> DeviceResponseEntry:
         """Fetch combined data and map library errors to HA errors."""
@@ -173,8 +191,10 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
                 return
             except asyncio.CancelledError:
                 raise
-            except Exception as err:  # pylint: disable=broad-except
+            except (ClientError, ConnectionError, OSError, UpdateFailed) as err:
                 LOGGER.debug("HomeWizard websocket disconnected: %s", err)
+            except Exception:  # pylint: disable=broad-except
+                LOGGER.exception("Unexpected HomeWizard websocket error")
             finally:
                 self._ws_connected = False
 
@@ -195,6 +215,7 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
             websocket_url,
             ssl=ssl_context,
             heartbeat=30,
+            server_hostname=self.api.host if ssl_context.check_hostname else None,
         ) as websocket:
             await self._async_authorize_websocket(websocket)
 
@@ -214,11 +235,7 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
                     continue
 
                 if event_type == "error":
-                    data = payload.get("data")
-                    message = ""
-                    if isinstance(data, dict):
-                        message_value = data.get("message", "")
-                        message = str(message_value)
+                    message = self._ws_error_message(payload)
                     if "unauthorized" in message.lower():
                         raise ConfigEntryAuthFailed("WebSocket authorization rejected")
                     LOGGER.debug("HomeWizard websocket error: %s", payload)
@@ -249,14 +266,20 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
                 return
 
             if event_type == "error":
-                data = payload.get("data")
-                message = ""
-                if isinstance(data, dict):
-                    message_value = data.get("message", "")
-                    message = str(message_value)
+                message = self._ws_error_message(payload)
                 if "unauthorized" in message.lower():
                     raise ConfigEntryAuthFailed("WebSocket authorization rejected")
                 raise UpdateFailed(f"WebSocket authorization failed: {message}")
+
+    @staticmethod
+    def _ws_error_message(payload: dict[str, object]) -> str:
+        """Extract error message text from websocket payload."""
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            return ""
+
+        message_value = data.get("message", "")
+        return str(message_value)
 
     async def _async_receive_ws_json(
         self, websocket: ClientWebSocketResponse, timeout: int
@@ -287,15 +310,29 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
         if now - self._last_ws_refresh < WS_MIN_REFRESH_GAP_SECONDS:
             return
 
-        self._last_ws_refresh = now
-        try:
-            data = await self._async_fetch_combined_data()
-        except UpdateFailed as err:
-            LOGGER.debug("WebSocket-triggered refresh failed on %s: %s", event_type, err)
+        if self._ws_refresh_lock.locked():
+            self._ws_refresh_pending = True
             return
 
-        self._record_ws_update()
-        self.async_set_updated_data(data)
+        async with self._ws_refresh_lock:
+            while True:
+                try:
+                    data = await self._async_fetch_combined_data()
+                except UpdateFailed as err:
+                    LOGGER.debug(
+                        "WebSocket-triggered refresh failed on %s: %s", event_type, err
+                    )
+                    self._ws_refresh_pending = False
+                    return
+
+                self._last_ws_refresh = monotonic()
+                self._record_ws_update()
+                self.async_set_updated_data(data)
+
+                if not self._ws_refresh_pending:
+                    return
+
+                self._ws_refresh_pending = False
 
     async def _async_get_ws_ssl_context(self) -> ssl.SSLContext:
         """Build and cache SSL context used for websocket v2 endpoint."""
@@ -305,7 +342,13 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
         def _build_context() -> ssl.SSLContext:
             context = ssl.create_default_context(cadata=CACERT)
             context.verify_flags = ssl.VERIFY_X509_PARTIAL_CHAIN  # pylint: disable=no-member
-            context.check_hostname = False
+            try:
+                ip_address(self.api.host)
+            except ValueError:
+                context.check_hostname = True
+            else:
+                # Devices are often addressed by IP; certificates rarely contain IP SANs.
+                context.check_hostname = False
             context.verify_mode = ssl.CERT_REQUIRED
             return context
 
