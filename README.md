@@ -7,7 +7,7 @@ Home Assistant’s official HomeWizard integration is documented here:
 
 ## Why this exists
 
-The official integration typically updates at a slower interval (commonly ~5s). This custom integration sets the coordinator update interval to **1s** to get near real-time power readings.
+This custom integration keeps a **1 second** coordinator interval to deliver near real-time power readings.
 
 Because this integration uses a different domain (`homewizard_instant`), it can run **side-by-side** with the official integration.
 
@@ -31,6 +31,8 @@ This integration is configured via the UI. The only required parameter is:
 
 - **IP address**: the local IP address of your HomeWizard P1 meter.
 
+Depending on device firmware/API mode, setup can require pressing the physical button on the HomeWizard device so Home Assistant can obtain a local API token.
+
 The integration will store the device by a domain-prefixed unique ID to avoid collisions with the official integration.
 
 ### Installation parameters
@@ -40,7 +42,12 @@ The integration will store the device by a domain-prefixed unique ID to avoid co
 
 ## Data updates
 
-The integration polls the HomeWizard local API every **1 second** using a single coordinator update call. All entities read from the coordinator data.
+All entities read from one coordinator data source.
+
+- Baseline behavior: poll the HomeWizard local API every **1 second**.
+- On v2-capable devices with token auth, websocket events trigger immediate refreshes.
+- While websocket updates stay healthy, regular poll fetches are skipped to reduce duplicate requests.
+- If websocket activity becomes stale or disconnects, polling continues as fallback.
 
 ## Supported devices
 
@@ -76,7 +83,3 @@ The integration polls the HomeWizard local API every **1 second** using a single
 2. If installed manually, delete `custom_components/homewizard_instant`.
 3. If installed via HACS, remove the repository from HACS and restart Home Assistant.
 
-## Notes
-
-- Polling every second increases local network traffic and load on the device compared to slower polling intervals.
-- Only **P1 meters** are supported by this integration.

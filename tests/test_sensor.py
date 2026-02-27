@@ -5,8 +5,11 @@ from __future__ import annotations
 from unittest.mock import AsyncMock
 
 from homeassistant.components.sensor import SensorDeviceClass
+from homeassistant.const import CONF_IP_ADDRESS
 from homeassistant.const import UnitOfVolume
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.homewizard_instant.const import DOMAIN
 from custom_components.homewizard_instant.coordinator import (
     HWEnergyDeviceUpdateCoordinator,
 )
@@ -218,3 +221,48 @@ async def test_import_tariff_t1_sensor_does_not_depend_on_export_t2(
         and entity.entity_description.key == "total_power_import_t1_kwh"
         for entity in added
     )
+
+
+async def test_external_sensor_unique_id_is_scoped_per_config_entry(
+    hass, mock_config_entry, mock_combined_data
+):
+    """Test external sensor IDs are unique across multiple configured P1 devices."""
+    mock_config_entry.add_to_hass(hass)
+
+    coordinator_1 = HWEnergyDeviceUpdateCoordinator(
+        hass,
+        mock_config_entry,
+        api=AsyncMock(),
+        clientsession=AsyncMock(),
+        ws_token=None,
+    )
+    coordinator_1.data = mock_combined_data
+
+    second_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_IP_ADDRESS: "5.6.7.8"},
+        unique_id=f"{DOMAIN}_P1_SERIAL456",
+        title="P1 Meter 2",
+    )
+    second_entry.add_to_hass(hass)
+
+    coordinator_2 = HWEnergyDeviceUpdateCoordinator(
+        hass,
+        second_entry,
+        api=AsyncMock(),
+        clientsession=AsyncMock(),
+        ws_token=None,
+    )
+    coordinator_2.data = mock_combined_data
+
+    from custom_components.homewizard_instant.sensor import EXTERNAL_SENSORS
+
+    description = EXTERNAL_SENSORS[
+        coordinator_1.data.measurement.external_devices["gas123"].type
+    ]
+
+    external_1 = HomeWizardExternalSensorEntity(coordinator_1, description, "gas123")
+    external_2 = HomeWizardExternalSensorEntity(coordinator_2, description, "gas123")
+
+    assert external_1.unique_id != external_2.unique_id
+    assert external_1.device_info["identifiers"] != external_2.device_info["identifiers"]

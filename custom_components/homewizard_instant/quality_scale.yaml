@@ -66,6 +66,4 @@ rules:
   # Platinum
   async-dependency: done
   inject-websession: done
-  strict-typing:
-    status: exempt
-    comment: Strict typing is not enforced for this custom integration.
+  strict-typing: done

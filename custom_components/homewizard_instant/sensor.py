@@ -748,9 +748,15 @@ class HomeWizardExternalSensorEntity(HomeWizardEntity, SensorEntity):
         self.entity_description = description
         self._device_id = device_unique_id
         self._suggested_device_class = description.suggested_device_class
-        self._attr_unique_id = f"{DOMAIN}_{device_unique_id}"
+        # Scope external device IDs to the parent config entry to avoid
+        # collisions when multiple P1 meters expose the same external ID.
+        parent_unique_id = (
+            coordinator.config_entry.unique_id or coordinator.config_entry.entry_id
+        )
+        scoped_external_id = f"{parent_unique_id}_{device_unique_id}"
+        self._attr_unique_id = scoped_external_id
         self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, f"{DOMAIN}_{device_unique_id}")},
+            identifiers={(DOMAIN, scoped_external_id)},
             name=description.device_name,
             manufacturer="HomeWizard",
             model=coordinator.data.device.product_type,
