@@ -53,7 +53,8 @@ async def async_get_config_entry_diagnostics(
     hass: HomeAssistant, entry: HomeWizardConfigEntry
 ) -> dict[str, Any]:
     """Return diagnostics for a config entry."""
-    data = entry.runtime_data.data
+    coordinator = entry.runtime_data
+    data = coordinator.data
 
     return async_redact_data(
         {
@@ -63,6 +64,7 @@ async def async_get_config_entry_diagnostics(
                 "title": entry.title,
                 "unique_id": entry.unique_id,
             },
+            "runtime": coordinator.diagnostics_summary(),
             "data": _serialize_data(data),
         },
         TO_REDACT,

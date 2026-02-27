@@ -40,6 +40,14 @@ async def test_async_get_config_entry_diagnostics_redacts(
     assert diagnostics["entry"]["options"][CONF_IP_ADDRESS] == "**REDACTED**"
     assert diagnostics["entry"]["options"]["token"] == "**REDACTED**"
     assert diagnostics["entry"]["unique_id"] == "**REDACTED**"
+    assert diagnostics["runtime"]["websocket_enabled"] is False
+    assert diagnostics["runtime"]["websocket_connected"] is False
+    assert diagnostics["runtime"]["poll_updates_total"] == 0
+    assert diagnostics["runtime"]["websocket_updates_total"] == 0
+    assert diagnostics["runtime"]["websocket_messages_total"] == 0
+    assert diagnostics["runtime"]["poll_updates_per_second"] == 0.0
+    assert diagnostics["runtime"]["websocket_updates_per_second"] == 0.0
+    assert diagnostics["runtime"]["websocket_messages_per_second"] == 0.0
     assert diagnostics["data"]["device"]["serial"] == "**REDACTED**"
 
 

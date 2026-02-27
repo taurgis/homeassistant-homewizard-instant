@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 import json
 import random
 import ssl
@@ -32,6 +33,7 @@ WS_MAX_RETRY_DELAY = 60.0
 WS_MIN_REFRESH_GAP_SECONDS = 0.5
 WS_SUBSCRIPTIONS = ("measurement", "device", "system", "batteries")
 WS_REFRESH_EVENTS = frozenset({"measurement", "device", "system", "batteries"})
+STATS_WINDOW_SECONDS = 60.0
 
 
 class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]):
@@ -66,6 +68,13 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
         self._ws_ssl_context: ssl.SSLContext | None = None
         self._ws_connected = False
         self._last_ws_refresh = 0.0
+        self._last_ws_event = 0.0
+        self._poll_updates_total = 0
+        self._ws_updates_total = 0
+        self._ws_messages_total = 0
+        self._poll_update_timestamps: deque[float] = deque()
+        self._ws_update_timestamps: deque[float] = deque()
+        self._ws_message_timestamps: deque[float] = deque()
 
     @property
     def websocket_enabled(self) -> bool:
@@ -83,6 +92,7 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
     async def async_shutdown(self) -> None:
         """Stop websocket listener and close API resources."""
         self._ws_stop_event.set()
+        self._ws_connected = False
         if self._ws_task is not None:
             self._ws_task.cancel()
             try:
@@ -96,6 +106,7 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
     async def _async_update_data(self) -> DeviceResponseEntry:
         """Fetch all device and sensor data from api."""
         data = await self._async_fetch_combined_data()
+        self._record_poll_update()
         self.data = data
         return data
 
@@ -257,6 +268,8 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
         if message.type != WSMsgType.TEXT:
             return {}
 
+        self._record_ws_message()
+
         try:
             parsed = json.loads(message.data)
         except json.JSONDecodeError:
@@ -281,6 +294,7 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
             LOGGER.debug("WebSocket-triggered refresh failed on %s: %s", event_type, err)
             return
 
+        self._record_ws_update()
         self.async_set_updated_data(data)
 
     async def _async_get_ws_ssl_context(self) -> ssl.SSLContext:
@@ -297,3 +311,75 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
 
         self._ws_ssl_context = await self.hass.async_add_executor_job(_build_context)
         return self._ws_ssl_context
+
+    def diagnostics_summary(self) -> dict[str, object]:
+        """Return runtime telemetry used by diagnostics."""
+        now = monotonic()
+        self._trim_metric_windows(now)
+
+        websocket_last_event_seconds_ago: float | None = None
+        if self._last_ws_event > 0:
+            websocket_last_event_seconds_ago = round(now - self._last_ws_event, 3)
+
+        websocket_last_refresh_seconds_ago: float | None = None
+        if self._last_ws_refresh > 0:
+            websocket_last_refresh_seconds_ago = round(now - self._last_ws_refresh, 3)
+
+        return {
+            "websocket_enabled": self.websocket_enabled,
+            "websocket_connected": self._ws_connected,
+            "poll_updates_total": self._poll_updates_total,
+            "websocket_updates_total": self._ws_updates_total,
+            "websocket_messages_total": self._ws_messages_total,
+            "poll_updates_per_second": self._rate_from_window(
+                self._poll_update_timestamps
+            ),
+            "websocket_updates_per_second": self._rate_from_window(
+                self._ws_update_timestamps
+            ),
+            "websocket_messages_per_second": self._rate_from_window(
+                self._ws_message_timestamps
+            ),
+            "websocket_last_event_seconds_ago": websocket_last_event_seconds_ago,
+            "websocket_last_refresh_seconds_ago": websocket_last_refresh_seconds_ago,
+        }
+
+    def _record_poll_update(self) -> None:
+        """Track a successful poll-based coordinator refresh."""
+        self._poll_updates_total += 1
+        self._append_metric(self._poll_update_timestamps)
+
+    def _record_ws_update(self) -> None:
+        """Track a successful websocket-triggered coordinator refresh."""
+        self._ws_updates_total += 1
+        self._append_metric(self._ws_update_timestamps)
+
+    def _record_ws_message(self) -> None:
+        """Track incoming websocket message rate and last event timestamp."""
+        now = monotonic()
+        self._ws_messages_total += 1
+        self._last_ws_event = now
+        self._ws_message_timestamps.append(now)
+        self._trim_window(self._ws_message_timestamps, now)
+
+    def _append_metric(self, window: deque[float]) -> None:
+        """Append a timestamp to a rate window and trim old values."""
+        now = monotonic()
+        window.append(now)
+        self._trim_window(window, now)
+
+    def _trim_metric_windows(self, now: float) -> None:
+        """Trim all metric windows to the configured statistics horizon."""
+        self._trim_window(self._poll_update_timestamps, now)
+        self._trim_window(self._ws_update_timestamps, now)
+        self._trim_window(self._ws_message_timestamps, now)
+
+    def _trim_window(self, window: deque[float], now: float) -> None:
+        """Trim a timestamp deque to the rolling stats window."""
+        cutoff = now - STATS_WINDOW_SECONDS
+        while window and window[0] < cutoff:
+            window.popleft()
+
+    def _rate_from_window(self, window: deque[float]) -> float:
+        """Compute per-second rate for the current rolling stats window."""
+        return round(len(window) / STATS_WINDOW_SECONDS, 3)
