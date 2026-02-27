@@ -255,6 +255,38 @@ async def test_zeroconf_discovery_confirm(hass) -> None:
     assert result["step_id"] == "discovery_confirm"
 
 
+async def test_zeroconf_updates_existing_entry_ip(hass) -> None:
+    """Test zeroconf updates IP for already configured device."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_IP_ADDRESS: "1.2.3.4"},
+        unique_id=f"{DOMAIN}_{Model.P1_METER}_SERIAL123",
+    )
+    entry.add_to_hass(hass)
+
+    discovery_info = ZeroconfServiceInfo(
+        ip_address=ip_address("2.3.4.5"),
+        ip_addresses=[ip_address("2.3.4.5")],
+        port=80,
+        hostname="hw.local.",
+        type="_hwenergy._tcp.local.",
+        name="hwenergy",
+        properties={
+            CONF_PRODUCT_NAME: "P1 Meter",
+            CONF_PRODUCT_TYPE: Model.P1_METER,
+            CONF_SERIAL: "SERIAL123",
+        },
+    )
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "zeroconf"}, data=discovery_info
+    )
+
+    assert result["type"] == FlowResultType.ABORT
+    assert result["reason"] == "already_configured"
+    assert entry.data[CONF_IP_ADDRESS] == "2.3.4.5"
+
+
 async def test_discovery_confirm_creates_entry(hass, mock_device_info) -> None:
     """Test discovery confirm creates entry."""
     discovery_info = ZeroconfServiceInfo(
@@ -472,6 +504,40 @@ async def test_dhcp_unknown_device(hass) -> None:
 
     assert result["type"] == FlowResultType.ABORT
     assert result["reason"] == "unknown_error"
+
+
+async def test_dhcp_updates_existing_entry_ip(hass) -> None:
+    """Test dhcp updates IP for already configured device."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_IP_ADDRESS: "1.2.3.4"},
+        unique_id=f"{DOMAIN}_{Model.P1_METER}_SERIAL123",
+    )
+    entry.add_to_hass(hass)
+
+    discovery_info = DhcpServiceInfo(
+        ip="2.3.4.5",
+        hostname="hw",
+        macaddress="AA:BB:CC:DD:EE:FF",
+    )
+
+    device_info = SimpleNamespace(
+        product_type=Model.P1_METER,
+        product_name="P1 Meter",
+        serial="SERIAL123",
+    )
+
+    with patch(
+        "custom_components.homewizard_instant.config_flow.async_try_connect",
+        return_value=device_info,
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": "dhcp"}, data=discovery_info
+        )
+
+    assert result["type"] == FlowResultType.ABORT
+    assert result["reason"] == "already_configured"
+    assert entry.data[CONF_IP_ADDRESS] == "2.3.4.5"
 
 
 async def test_dhcp_device_not_supported(hass) -> None:

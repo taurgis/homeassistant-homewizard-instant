@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
+from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC
+
 from custom_components.homewizard_instant.const import DOMAIN
 from custom_components.homewizard_instant.coordinator import (
     HWEnergyDeviceUpdateCoordinator,
@@ -24,3 +26,18 @@ async def test_entity_device_info_identifiers(hass, mock_config_entry, mock_comb
 
     identifiers = entity.device_info["identifiers"]
     assert (DOMAIN, f"{DOMAIN}_{mock_combined_data.device.serial}") in identifiers
+
+
+async def test_entity_device_info_connections(hass, mock_config_entry, mock_combined_data):
+    """Test entity registers MAC connection for DHCP registered_devices matching."""
+    mock_config_entry.add_to_hass(hass)
+
+    coordinator = HWEnergyDeviceUpdateCoordinator(
+        hass, mock_config_entry, api=AsyncMock()
+    )
+    coordinator.data = mock_combined_data
+
+    entity = HomeWizardEntity(coordinator)
+
+    connections = entity.device_info["connections"]
+    assert (CONNECTION_NETWORK_MAC, mock_combined_data.device.serial) in connections
