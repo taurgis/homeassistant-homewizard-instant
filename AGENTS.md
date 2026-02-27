@@ -97,6 +97,8 @@ External devices (gas/water/heat meters):
 ## Local development
 
 - Use the VS Code task "Start Home Assistant" to run a dev instance.
+- On macOS shells, use `python3` for Python commands; `python` may resolve to Python 2.7 or be missing.
+- Prefer `python3 -m pip ...` over bare `pip`/`pip3` so installs target the same interpreter used for tests.
 - When troubleshooting, check Home Assistant logs for `homewizard_instant` messages.
 
 ## Verification after changes
