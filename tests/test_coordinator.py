@@ -241,3 +241,94 @@ async def test_ws_ssl_context_disables_hostname_verification_for_ip_host(
     context = await coordinator._async_get_ws_ssl_context()
 
     assert context.check_hostname is False
+
+
+async def test_websocket_refresh_respects_min_refresh_gap(
+    hass, mock_config_entry, mock_combined_data
+):
+    """Test websocket refresh is skipped when called inside the refresh gap."""
+    mock_config_entry.add_to_hass(hass)
+
+    coordinator = HWEnergyDeviceUpdateCoordinator(
+        hass,
+        mock_config_entry,
+        AsyncMock(),
+        clientsession=AsyncMock(),
+        ws_token="token123",
+    )
+    coordinator._async_fetch_combined_data = AsyncMock(return_value=mock_combined_data)
+    coordinator.async_set_updated_data = Mock()
+
+    await coordinator._async_refresh_from_websocket("measurement")
+    await coordinator._async_refresh_from_websocket("measurement")
+
+    assert coordinator._async_fetch_combined_data.await_count == 1
+    assert coordinator.async_set_updated_data.call_count == 1
+
+
+async def test_poll_and_websocket_fetches_do_not_overlap(
+    hass, mock_config_entry, mock_combined_data
+):
+    """Test poll and websocket refreshes serialize shared API fetches."""
+    mock_config_entry.add_to_hass(hass)
+
+    api = AsyncMock()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    in_flight = 0
+    max_in_flight = 0
+
+    async def fake_combined():
+        nonlocal in_flight, max_in_flight
+        in_flight += 1
+        max_in_flight = max(max_in_flight, in_flight)
+        if in_flight == 1:
+            started.set()
+            await release.wait()
+        in_flight -= 1
+        return mock_combined_data
+
+    api.combined = AsyncMock(side_effect=fake_combined)
+
+    coordinator = HWEnergyDeviceUpdateCoordinator(
+        hass,
+        mock_config_entry,
+        api,
+        clientsession=AsyncMock(),
+        ws_token="token123",
+    )
+
+    poll_task = asyncio.create_task(coordinator._async_update_data())
+    await started.wait()
+
+    ws_task = asyncio.create_task(
+        coordinator._async_refresh_from_websocket("measurement")
+    )
+    await asyncio.sleep(0)
+
+    release.set()
+    await asyncio.gather(poll_task, ws_task)
+
+    assert api.combined.await_count == 2
+    assert max_in_flight == 1
+
+
+async def test_websocket_authorize_unauthorized_error_raises_auth_failed(
+    hass, mock_config_entry
+):
+    """Test unauthorized websocket auth payload triggers reauth path."""
+    mock_config_entry.add_to_hass(hass)
+
+    coordinator = HWEnergyDeviceUpdateCoordinator(
+        hass,
+        mock_config_entry,
+        AsyncMock(),
+        clientsession=AsyncMock(),
+        ws_token="token123",
+    )
+    coordinator._async_receive_ws_json = AsyncMock(
+        return_value={"type": "error", "data": {"message": "unauthorized"}}
+    )
+
+    with pytest.raises(ConfigEntryAuthFailed):
+        await coordinator._async_authorize_websocket(AsyncMock())

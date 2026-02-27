@@ -135,8 +135,13 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
         """Request and confirm a v2 authorization token."""
         assert self.ip_address
 
-        token = await async_request_token(self.hass, self.ip_address)
         errors: dict[str, str] | None = None
+        try:
+            token = await async_request_token(self.hass, self.ip_address)
+        except RecoverableError as ex:
+            LOGGER.debug("Authorization token request failed: %s", ex)
+            errors = {"base": ex.error_code}
+            return self.async_show_form(step_id="authorize", errors=errors)
 
         if token is None:
             if user_input is not None:
@@ -325,7 +330,14 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
         assert self.ip_address
 
         errors: dict[str, str] | None = None
-        token = await async_request_token(self.hass, self.ip_address)
+        try:
+            token = await async_request_token(self.hass, self.ip_address)
+        except RecoverableError as ex:
+            LOGGER.debug("Reauth token request failed: %s", ex)
+            errors = {"base": ex.error_code}
+            return self.async_show_form(
+                step_id="reauth_confirm_update_token", errors=errors
+            )
 
         if user_input is not None:
             if token is None:
@@ -464,6 +476,15 @@ async def async_request_token(
         return await api.get_token(f"home-assistant#{uuid[:6]}")
     except DisabledError:
         return None
+    except RequestError as ex:
+        raise RecoverableError(
+            "Device unreachable or unexpected response", "network_error"
+        ) from ex
+    except asyncio.CancelledError:
+        raise
+    except Exception as ex:
+        LOGGER.exception("Unexpected exception")
+        raise AbortFlow("unknown_error") from ex
     finally:
         await api.close()
 

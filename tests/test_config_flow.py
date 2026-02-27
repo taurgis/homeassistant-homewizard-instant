@@ -17,7 +17,11 @@ from homeassistant.components.zeroconf import ZeroconfServiceInfo
 
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.homewizard_instant.config_flow import RecoverableError, async_try_connect
+from custom_components.homewizard_instant.config_flow import (
+    RecoverableError,
+    async_request_token,
+    async_try_connect,
+)
 from custom_components.homewizard_instant.const import (
     CONF_PRODUCT_NAME,
     CONF_PRODUCT_TYPE,
@@ -132,6 +136,31 @@ async def test_async_try_connect_unexpected_error(hass) -> None:
     mock_api.close.assert_awaited_once()
 
 
+async def test_async_request_token_request_error(hass) -> None:
+    """Test async_request_token maps RequestError to RecoverableError."""
+    from homewizard_energy.errors import RequestError
+
+    mock_api = AsyncMock()
+    mock_api.get_token = AsyncMock(side_effect=RequestError("boom"))
+    mock_api.close = AsyncMock()
+
+    with (
+        patch(
+            "custom_components.homewizard_instant.config_flow.HomeWizardEnergyV2",
+            return_value=mock_api,
+        ),
+        patch(
+            "custom_components.homewizard_instant.config_flow.instance_id.async_get",
+            new=AsyncMock(return_value="abcdef123456"),
+        ),
+    ):
+        with pytest.raises(RecoverableError) as err:
+            await async_request_token(hass, "1.2.3.4", clientsession=AsyncMock())
+
+    assert err.value.error_code == "network_error"
+    mock_api.close.assert_awaited_once()
+
+
 async def test_user_flow_success(hass, mock_device_info) -> None:
     """Test user flow success."""
     with patch(
@@ -240,6 +269,31 @@ async def test_user_flow_unauthorized_shows_authorize_step(hass) -> None:
 
     assert result2["type"] == FlowResultType.FORM
     assert result2["step_id"] == "authorize"
+
+
+async def test_user_flow_unauthorized_token_request_network_error(hass) -> None:
+    """Test authorize step surfaces network errors while requesting token."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
+
+    with (
+        patch(
+            "custom_components.homewizard_instant.config_flow.async_try_connect",
+            side_effect=UnauthorizedError("unauthorized"),
+        ),
+        patch(
+            "custom_components.homewizard_instant.config_flow.async_request_token",
+            new=AsyncMock(side_effect=RecoverableError("boom", "network_error")),
+        ),
+    ):
+        result2 = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_IP_ADDRESS: "1.2.3.4"}
+        )
+
+    assert result2["type"] == FlowResultType.FORM
+    assert result2["step_id"] == "authorize"
+    assert result2["errors"] == {"base": "network_error"}
 
 
 async def test_authorize_step_success_creates_entry(hass, mock_device_info) -> None:
@@ -531,6 +585,31 @@ async def test_reauth_flow_with_token_updates_token(hass) -> None:
 
     assert result2["type"] == FlowResultType.ABORT
     assert result2["reason"] == "reauth_successful"
+
+
+async def test_reauth_flow_with_token_request_network_error(hass) -> None:
+    """Test reauth token refresh form surfaces network errors."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_IP_ADDRESS: "1.2.3.4", CONF_TOKEN: "old-token"},
+        unique_id=f"{DOMAIN}_{Model.P1_METER}_SERIAL123",
+        title="P1 Meter",
+    )
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.homewizard_instant.config_flow.async_request_token",
+        new=AsyncMock(side_effect=RecoverableError("boom", "network_error")),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN,
+            context={"source": "reauth", "entry_id": entry.entry_id},
+            data=entry.data,
+        )
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "reauth_confirm_update_token"
+    assert result["errors"] == {"base": "network_error"}
 
 
 async def test_reconfigure_flow_updates_entry(hass, mock_config_entry, mock_device_info):

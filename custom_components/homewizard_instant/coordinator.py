@@ -31,7 +31,7 @@ WS_AUTH_TIMEOUT = 40
 WS_RECEIVE_TIMEOUT = 90
 WS_INITIAL_RETRY_DELAY = 1.0
 WS_MAX_RETRY_DELAY = 60.0
-WS_MIN_REFRESH_GAP_SECONDS = 0.0
+WS_MIN_REFRESH_GAP_SECONDS = 0.5
 WS_ACTIVITY_STALE_SECONDS = 10.0
 WS_SUBSCRIPTIONS = ("measurement", "device", "system", "batteries")
 WS_REFRESH_EVENTS = frozenset({"measurement", "device", "system", "batteries"})
@@ -77,6 +77,7 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
         self._poll_update_timestamps: deque[float] = deque()
         self._ws_update_timestamps: deque[float] = deque()
         self._ws_message_timestamps: deque[float] = deque()
+        self._fetch_lock = asyncio.Lock()
         self._ws_refresh_lock = asyncio.Lock()
         self._ws_refresh_pending = False
 
@@ -91,7 +92,11 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
             return
 
         self._ws_stop_event.clear()
-        self._ws_task = self.hass.async_create_task(self._async_websocket_loop())
+        self._ws_task = self.config_entry.async_create_background_task(
+            self.hass,
+            self._async_websocket_loop(),
+            name=f"{DOMAIN}_websocket_{self.config_entry.entry_id}",
+        )
 
     async def async_shutdown(self) -> None:
         """Stop websocket listener and close API resources."""
@@ -112,10 +117,15 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
         if self.data is not None and self._websocket_is_realtime_active():
             return self.data
 
-        data = await self._async_fetch_combined_data()
+        data = await self._async_fetch_combined_data_serialized()
         self._record_poll_update()
         self.data = data
         return data
+
+    async def _async_fetch_combined_data_serialized(self) -> DeviceResponseEntry:
+        """Serialize API fetches so websocket and poll refreshes never overlap."""
+        async with self._fetch_lock:
+            return await self._async_fetch_combined_data()
 
     def _websocket_is_realtime_active(self) -> bool:
         """Return True when websocket updates are currently healthy."""
@@ -317,7 +327,7 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
         async with self._ws_refresh_lock:
             while True:
                 try:
-                    data = await self._async_fetch_combined_data()
+                    data = await self._async_fetch_combined_data_serialized()
                 except UpdateFailed as err:
                     LOGGER.debug(
                         "WebSocket-triggered refresh failed on %s: %s", event_type, err
