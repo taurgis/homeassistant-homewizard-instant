@@ -133,50 +133,55 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Request and confirm a v2 authorization token."""
-        assert self.ip_address
-
-        errors: dict[str, str] | None = None
-        try:
-            token = await async_request_token(self.hass, self.ip_address)
-        except RecoverableError as ex:
-            LOGGER.debug("Authorization token request failed: %s", ex)
-            errors = {"base": ex.error_code}
-            return self.async_show_form(step_id="authorize", errors=errors)
-
-        if token is None:
-            if user_input is not None:
-                errors = {"base": "authorization_failed"}
-            return self.async_show_form(step_id="authorize", errors=errors)
-
-        try:
-            device_info = await async_try_connect(self.hass, self.ip_address, token=token)
-        except RecoverableError as ex:
-            LOGGER.debug("Authorization step connection check failed: %s", ex)
-            errors = {"base": ex.error_code}
-            return self.async_show_form(step_id="authorize", errors=errors)
-        except UnauthorizedError:
-            errors = {"base": "authorization_failed"}
-            return self.async_show_form(step_id="authorize", errors=errors)
-
-        if device_info.product_type not in SUPPORTED_PRODUCT_TYPES:
-            return self.async_abort(reason="device_not_supported")
-
-        if device_info.serial is None:
+        if self.ip_address is None:
             return self.async_abort(reason="unknown_error")
 
-        data = {
-            CONF_IP_ADDRESS: self.ip_address,
-            CONF_TOKEN: token,
-        }
+        errors: dict[str, str] | None = None
+        if user_input is not None:
+            try:
+                token = await async_request_token(self.hass, self.ip_address)
+            except RecoverableError as ex:
+                LOGGER.debug("Authorization token request failed: %s", ex)
+                errors = {"base": ex.error_code}
+                return self.async_show_form(step_id="authorize", errors=errors)
 
-        await self.async_set_unique_id(
-            f"{DOMAIN}_{device_info.product_type}_{device_info.serial}"
-        )
-        self._abort_if_unique_id_configured(updates=data)
-        return self.async_create_entry(
-            title=f"{device_info.product_name}",
-            data=data,
-        )
+            if token is None:
+                errors = {"base": "authorization_failed"}
+                return self.async_show_form(step_id="authorize", errors=errors)
+
+            try:
+                device_info = await async_try_connect(
+                    self.hass, self.ip_address, token=token
+                )
+            except RecoverableError as ex:
+                LOGGER.debug("Authorization step connection check failed: %s", ex)
+                errors = {"base": ex.error_code}
+                return self.async_show_form(step_id="authorize", errors=errors)
+            except UnauthorizedError:
+                errors = {"base": "authorization_failed"}
+                return self.async_show_form(step_id="authorize", errors=errors)
+
+            if device_info.product_type not in SUPPORTED_PRODUCT_TYPES:
+                return self.async_abort(reason="device_not_supported")
+
+            if device_info.serial is None:
+                return self.async_abort(reason="unknown_error")
+
+            data = {
+                CONF_IP_ADDRESS: self.ip_address,
+                CONF_TOKEN: token,
+            }
+
+            await self.async_set_unique_id(
+                f"{DOMAIN}_{device_info.product_type}_{device_info.serial}"
+            )
+            self._abort_if_unique_id_configured(updates=data)
+            return self.async_create_entry(
+                title=f"{device_info.product_name}",
+                data=data,
+            )
+
+        return self.async_show_form(step_id="authorize", errors=errors)
 
     async def async_step_zeroconf(
         self, discovery_info: ZeroconfServiceInfo
@@ -327,19 +332,20 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Confirm reauth and refresh an expired v2 token."""
-        assert self.ip_address
+        if self.ip_address is None:
+            return self.async_abort(reason="unknown_error")
 
         errors: dict[str, str] | None = None
-        try:
-            token = await async_request_token(self.hass, self.ip_address)
-        except RecoverableError as ex:
-            LOGGER.debug("Reauth token request failed: %s", ex)
-            errors = {"base": ex.error_code}
-            return self.async_show_form(
-                step_id="reauth_confirm_update_token", errors=errors
-            )
-
         if user_input is not None:
+            try:
+                token = await async_request_token(self.hass, self.ip_address)
+            except RecoverableError as ex:
+                LOGGER.debug("Reauth token request failed: %s", ex)
+                errors = {"base": ex.error_code}
+                return self.async_show_form(
+                    step_id="reauth_confirm_update_token", errors=errors
+                )
+
             if token is None:
                 errors = {"base": "authorization_failed"}
             else:

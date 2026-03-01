@@ -40,14 +40,16 @@ class MigrateToV2ApiRepairFlow(RepairsFlow):
         self, user_input: dict[str, str] | None = None
     ) -> FlowResult:
         """Request a v2 token and migrate the existing config entry."""
+        if user_input is None:
+            return self.async_show_form(step_id="authorize")
+
         ip_address = self.entry.data[CONF_IP_ADDRESS]
         token = await async_request_token(self.hass, ip_address)
-        errors: dict[str, str] | None = None
 
         if token is None:
-            if user_input is not None:
-                errors = {"base": "authorization_failed"}
-            return self.async_show_form(step_id="authorize", errors=errors)
+            return self.async_show_form(
+                step_id="authorize", errors={"base": "authorization_failed"}
+            )
 
         data = {**self.entry.data, CONF_TOKEN: token}
         self.hass.config_entries.async_update_entry(self.entry, data=data)
@@ -61,11 +63,12 @@ async def async_create_fix_flow(
     data: dict[str, str | int | float | None] | None,
 ) -> RepairsFlow:
     """Create a repair flow for a known issue."""
-    assert data is not None
-    assert isinstance(data["entry_id"], str)
+    entry_id = data.get("entry_id") if data is not None else None
+    if not isinstance(entry_id, str):
+        raise ValueError("unknown repair context")
 
     if issue_id.startswith("migrate_to_v2_api_") and (
-        entry := hass.config_entries.async_get_entry(data["entry_id"])
+        entry := hass.config_entries.async_get_entry(entry_id)
     ):
         return MigrateToV2ApiRepairFlow(entry)
 

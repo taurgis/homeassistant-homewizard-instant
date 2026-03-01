@@ -23,6 +23,7 @@ from custom_components.homewizard_instant.sensor import (
     to_percentage,
     uptime_to_datetime,
 )
+from homeassistant.components.sensor import SensorStateClass
 
 
 async def test_async_setup_entry_adds_entities(hass, mock_config_entry, mock_combined_data):
@@ -266,3 +267,35 @@ async def test_external_sensor_unique_id_is_scoped_per_config_entry(
 
     assert external_1.unique_id != external_2.unique_id
     assert external_1.device_info["identifiers"] != external_2.device_info["identifiers"]
+
+
+async def test_energy_sensor_zero_value_is_available(
+    hass, mock_config_entry, mock_combined_data
+):
+    """Test energy sensors keep valid 0 values instead of becoming unavailable."""
+    mock_config_entry.add_to_hass(hass)
+
+    coordinator = HWEnergyDeviceUpdateCoordinator(
+        hass,
+        mock_config_entry,
+        api=AsyncMock(),
+        clientsession=AsyncMock(),
+        ws_token=None,
+    )
+    coordinator.data = mock_combined_data
+    coordinator.data.measurement.energy_import_kwh = 0.0
+
+    description = next(d for d in SENSORS if d.key == "total_power_import_kwh")
+    entity = HomeWizardSensorEntity(coordinator, description)
+
+    assert entity.native_value == 0.0
+    assert entity.available is True
+
+
+def test_power_average_and_peak_have_measurement_state_class() -> None:
+    """Test average and monthly peak power sensors expose measurement state class."""
+    average = next(d for d in SENSORS if d.key == "active_power_average_w")
+    monthly_peak = next(d for d in SENSORS if d.key == "monthly_power_peak_w")
+
+    assert average.state_class == SensorStateClass.MEASUREMENT
+    assert monthly_peak.state_class == SensorStateClass.MEASUREMENT

@@ -216,7 +216,8 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
 
     async def _async_websocket_session(self) -> None:
         """Run a single websocket session until it closes."""
-        assert self._ws_token
+        if self._ws_token is None:
+            raise UpdateFailed("WebSocket token missing")
 
         websocket_url = f"wss://{self.api.host}/api/ws"
         ssl_context = await self._async_get_ws_ssl_context()
@@ -258,7 +259,9 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
         self, websocket: ClientWebSocketResponse
     ) -> None:
         """Perform websocket authorization handshake."""
-        assert self._ws_token
+        token = self._ws_token
+        if token is None:
+            raise UpdateFailed("WebSocket token missing")
 
         while True:
             payload = await self._async_receive_ws_json(websocket, WS_AUTH_TIMEOUT)
@@ -268,7 +271,7 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
             event_type = payload.get("type")
             if event_type == "authorization_requested":
                 await websocket.send_json(
-                    {"type": "authorization", "data": self._ws_token}
+                    {"type": "authorization", "data": token}
                 )
                 continue
 

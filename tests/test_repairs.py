@@ -77,3 +77,36 @@ async def test_repair_flow_authorize_failed_shows_error(hass, mock_config_entry)
     assert result["type"] == FlowResultType.FORM
     assert result["step_id"] == "authorize"
     assert result["errors"] == {"base": "authorization_failed"}
+
+
+async def test_repair_flow_authorize_shows_form_before_submit(
+    hass, mock_config_entry
+) -> None:
+    """Test repair authorize step only requests token after user submission."""
+    mock_config_entry.add_to_hass(hass)
+
+    flow = MigrateToV2ApiRepairFlow(mock_config_entry)
+    flow.hass = hass
+
+    with patch(
+        "custom_components.homewizard_instant.repairs.async_request_token",
+        new=AsyncMock(return_value="new-token"),
+    ) as request_token:
+        result = await flow.async_step_authorize()
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "authorize"
+    request_token.assert_not_awaited()
+
+
+async def test_async_create_fix_flow_raises_on_invalid_context(hass) -> None:
+    """Test fix flow resolver rejects missing or invalid issue context."""
+    with pytest.raises(ValueError):
+        await async_create_fix_flow(hass, "migrate_to_v2_api_missing", None)
+
+    with pytest.raises(ValueError):
+        await async_create_fix_flow(
+            hass,
+            "migrate_to_v2_api_invalid",
+            {"entry_id": 123},
+        )

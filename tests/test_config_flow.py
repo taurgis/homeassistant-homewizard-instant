@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from ipaddress import ip_address
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -18,6 +19,7 @@ from homeassistant.components.zeroconf import ZeroconfServiceInfo
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.homewizard_instant.config_flow import (
+    HomeWizardConfigFlow,
     RecoverableError,
     async_request_token,
     async_try_connect,
@@ -277,15 +279,9 @@ async def test_user_flow_unauthorized_token_request_network_error(hass) -> None:
         DOMAIN, context={"source": "user"}
     )
 
-    with (
-        patch(
-            "custom_components.homewizard_instant.config_flow.async_try_connect",
-            side_effect=UnauthorizedError("unauthorized"),
-        ),
-        patch(
-            "custom_components.homewizard_instant.config_flow.async_request_token",
-            new=AsyncMock(side_effect=RecoverableError("boom", "network_error")),
-        ),
+    with patch(
+        "custom_components.homewizard_instant.config_flow.async_try_connect",
+        side_effect=UnauthorizedError("unauthorized"),
     ):
         result2 = await hass.config_entries.flow.async_configure(
             result["flow_id"], {CONF_IP_ADDRESS: "1.2.3.4"}
@@ -293,7 +289,17 @@ async def test_user_flow_unauthorized_token_request_network_error(hass) -> None:
 
     assert result2["type"] == FlowResultType.FORM
     assert result2["step_id"] == "authorize"
-    assert result2["errors"] == {"base": "network_error"}
+    assert result2["errors"] is None
+
+    with patch(
+        "custom_components.homewizard_instant.config_flow.async_request_token",
+        new=AsyncMock(side_effect=RecoverableError("boom", "network_error")),
+    ):
+        result3 = await hass.config_entries.flow.async_configure(result2["flow_id"], {})
+
+    assert result3["type"] == FlowResultType.FORM
+    assert result3["step_id"] == "authorize"
+    assert result3["errors"] == {"base": "network_error"}
 
 
 async def test_authorize_step_success_creates_entry(hass, mock_device_info) -> None:
@@ -597,19 +603,25 @@ async def test_reauth_flow_with_token_request_network_error(hass) -> None:
     )
     entry.add_to_hass(hass)
 
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": "reauth", "entry_id": entry.entry_id},
+        data=entry.data,
+    )
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "reauth_confirm_update_token"
+    assert result["errors"] is None
+
     with patch(
         "custom_components.homewizard_instant.config_flow.async_request_token",
         new=AsyncMock(side_effect=RecoverableError("boom", "network_error")),
     ):
-        result = await hass.config_entries.flow.async_init(
-            DOMAIN,
-            context={"source": "reauth", "entry_id": entry.entry_id},
-            data=entry.data,
-        )
+        result2 = await hass.config_entries.flow.async_configure(result["flow_id"], {})
 
-    assert result["type"] == FlowResultType.FORM
-    assert result["step_id"] == "reauth_confirm_update_token"
-    assert result["errors"] == {"base": "network_error"}
+    assert result2["type"] == FlowResultType.FORM
+    assert result2["step_id"] == "reauth_confirm_update_token"
+    assert result2["errors"] == {"base": "network_error"}
 
 
 async def test_reconfigure_flow_updates_entry(hass, mock_config_entry, mock_device_info):
@@ -877,3 +889,120 @@ async def test_discovery_confirm_error(hass) -> None:
 
     assert result2["type"] == FlowResultType.FORM
     assert result2["errors"] == {"base": "network_error"}
+
+
+def test_serial_helpers() -> None:
+    """Test serial helper normalization and extraction logic."""
+    assert HomeWizardConfigFlow._normalize_serial("AA-BB:cc") == "aabbcc"
+    assert (
+        HomeWizardConfigFlow._serial_from_unique_id(
+            f"{DOMAIN}_{Model.P1_METER}_AA:BB:CC:DD:EE:FF"
+        )
+        == "AA:BB:CC:DD:EE:FF"
+    )
+    assert HomeWizardConfigFlow._serial_from_unique_id(None) is None
+    assert HomeWizardConfigFlow._serial_from_unique_id("other_domain_serial") is None
+    assert HomeWizardConfigFlow._serial_from_unique_id(f"{DOMAIN}_badformat") is None
+
+
+def test_token_for_discovery_mac_matching_entry(hass) -> None:
+    """Test discovery MAC matching returns stored token for existing entries."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_IP_ADDRESS: "1.2.3.4", CONF_TOKEN: "token123"},
+        unique_id=f"{DOMAIN}_{Model.P1_METER}_AA:BB:CC:DD:EE:FF",
+        title="P1 Meter",
+    )
+    entry.add_to_hass(hass)
+
+    flow = HomeWizardConfigFlow()
+    flow.hass = hass
+
+    assert flow._token_for_discovery_mac("AA-BB-CC-DD-EE-FF") == "token123"
+    assert flow._token_for_discovery_mac("11:22:33:44:55:66") is None
+
+
+async def test_async_try_connect_cancelled_error(hass) -> None:
+    """Test async_try_connect propagates cancellation."""
+    mock_api = AsyncMock()
+    mock_api.device = AsyncMock(side_effect=asyncio.CancelledError)
+    mock_api.close = AsyncMock()
+
+    with patch(
+        "custom_components.homewizard_instant.config_flow.HomeWizardEnergyV1",
+        return_value=mock_api,
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await async_try_connect(hass, "1.2.3.4", clientsession=AsyncMock())
+
+    mock_api.close.assert_awaited_once()
+
+
+async def test_async_request_token_disabled_returns_none(hass) -> None:
+    """Test async_request_token returns None when token issuance is disabled."""
+    from homewizard_energy.errors import DisabledError
+
+    mock_api = AsyncMock()
+    mock_api.get_token = AsyncMock(side_effect=DisabledError("disabled"))
+    mock_api.close = AsyncMock()
+
+    with (
+        patch(
+            "custom_components.homewizard_instant.config_flow.HomeWizardEnergyV2",
+            return_value=mock_api,
+        ),
+        patch(
+            "custom_components.homewizard_instant.config_flow.instance_id.async_get",
+            new=AsyncMock(return_value="abcdef123456"),
+        ),
+    ):
+        token = await async_request_token(hass, "1.2.3.4", clientsession=AsyncMock())
+
+    assert token is None
+    mock_api.close.assert_awaited_once()
+
+
+async def test_async_request_token_cancelled_error(hass) -> None:
+    """Test async_request_token propagates cancellation."""
+    mock_api = AsyncMock()
+    mock_api.get_token = AsyncMock(side_effect=asyncio.CancelledError)
+    mock_api.close = AsyncMock()
+
+    with (
+        patch(
+            "custom_components.homewizard_instant.config_flow.HomeWizardEnergyV2",
+            return_value=mock_api,
+        ),
+        patch(
+            "custom_components.homewizard_instant.config_flow.instance_id.async_get",
+            new=AsyncMock(return_value="abcdef123456"),
+        ),
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await async_request_token(hass, "1.2.3.4", clientsession=AsyncMock())
+
+    mock_api.close.assert_awaited_once()
+
+
+async def test_async_request_token_unexpected_error_aborts(hass) -> None:
+    """Test async_request_token converts unexpected errors to AbortFlow."""
+    from homeassistant.data_entry_flow import AbortFlow
+
+    mock_api = AsyncMock()
+    mock_api.get_token = AsyncMock(side_effect=Exception("boom"))
+    mock_api.close = AsyncMock()
+
+    with (
+        patch(
+            "custom_components.homewizard_instant.config_flow.HomeWizardEnergyV2",
+            return_value=mock_api,
+        ),
+        patch(
+            "custom_components.homewizard_instant.config_flow.instance_id.async_get",
+            new=AsyncMock(return_value="abcdef123456"),
+        ),
+    ):
+        with pytest.raises(AbortFlow):
+            await async_request_token(hass, "1.2.3.4", clientsession=AsyncMock())
+
+    mock_api.close.assert_awaited_once()
