@@ -15,6 +15,7 @@ from homeassistant.helpers.issue_registry import IssueSeverity, async_create_iss
 
 from .const import DOMAIN, PLATFORMS
 from .coordinator import HomeWizardConfigEntry, HWEnergyDeviceUpdateCoordinator
+from .v2_dev_ssl import InsecureHomeWizardEnergyV2, allow_insecure_v2_for_host
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: HomeWizardConfigEntry) -> bool:
@@ -25,7 +26,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomeWizardConfigEntry) -
     token: str | None = entry.data.get(CONF_TOKEN)
     api: HomeWizardEnergy
     if token is not None:
-        api = HomeWizardEnergyV2(
+        v2_class = (
+            InsecureHomeWizardEnergyV2
+            if allow_insecure_v2_for_host(entry.data[CONF_IP_ADDRESS])
+            else HomeWizardEnergyV2
+        )
+        api = v2_class(
             entry.data[CONF_IP_ADDRESS],
             token=token,
             clientsession=clientsession,

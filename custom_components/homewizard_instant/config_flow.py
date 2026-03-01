@@ -31,6 +31,7 @@ from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
 from .const import CONF_PRODUCT_NAME, CONF_PRODUCT_TYPE, CONF_SERIAL, DOMAIN, LOGGER
+from .v2_dev_ssl import InsecureHomeWizardEnergyV2, allow_insecure_v2_for_host
 
 # Only support P1 meter
 SUPPORTED_PRODUCT_TYPES = [Model.P1_METER]
@@ -424,7 +425,12 @@ async def async_try_connect(
     energy_api: HomeWizardEnergy
 
     if await has_v2_api(ip_address, websession=session):
-        energy_api = HomeWizardEnergyV2(
+        v2_class = (
+            InsecureHomeWizardEnergyV2
+            if allow_insecure_v2_for_host(ip_address)
+            else HomeWizardEnergyV2
+        )
+        energy_api = v2_class(
             ip_address,
             token=token,
             clientsession=session,
@@ -471,7 +477,13 @@ async def async_request_token(
 
     Returns None when user creation is not currently enabled on the device.
     """
-    api = HomeWizardEnergyV2(
+    v2_class = (
+        InsecureHomeWizardEnergyV2
+        if allow_insecure_v2_for_host(ip_address)
+        else HomeWizardEnergyV2
+    )
+
+    api = v2_class(
         ip_address,
         clientsession=clientsession or async_get_clientsession(hass),
     )

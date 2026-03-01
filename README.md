@@ -49,6 +49,71 @@ All entities read from one coordinator data source.
 - While websocket updates stay healthy, regular poll fetches are skipped to reduce duplicate requests.
 - If websocket activity becomes stale or disconnects, polling continues as fallback.
 
+## Development: Dummy P1 Meter Simulator
+
+For local development in this repository's devcontainer, Home Assistant and a
+HomeWizard-like P1 simulator run as separate Docker services via
+`.devcontainer/docker-compose.yml`.
+
+Both services are attached to an internal-only Docker network
+(`homewizard_instant_isolated`) so they cannot access your main network.
+
+The simulator exposes API v1 + API v2 endpoints and generates realistic measurements:
+
+- 1 Hz updates
+- Household load profile with morning/evening peaks and random appliance spikes
+- Solar production with daylight curve, clouds, and strong summer vs winter behavior
+- Net import/export power with cumulative energy counters and tariff switching
+- v2 token flow without physical button press (`POST /api/user` auto-authorizes)
+- v2 websocket stream on `wss://dummy-p1:15510/api/ws`
+
+### Start it
+
+Rebuild/reopen the devcontainer. Compose starts both services:
+
+- `homeassistant-dev`
+- `dummy-p1`
+
+The `dummy-p1` service is built from `.devcontainer/dummy-p1.Dockerfile`
+(`python:3.13-slim` + `aiohttp` + `openssl`) so it stays independent from the
+Home Assistant image.
+
+You can still run the simulator manually (outside Compose) if needed:
+
+```bash
+python3 .devcontainer/dummy_p1_meter.py --host 0.0.0.0 --port 15510
+```
+
+Then configure this integration with host:
+
+- `dummy-p1:15510`
+
+### Useful simulator endpoints
+
+V2 (`https://dummy-p1:15510`):
+
+- `POST /api/user` (returns token without button press in default dev mode)
+- `GET /api` (returns `401` without bearer token, as expected for v2 detection)
+- `GET /api/measurement`
+- `GET/PUT /api/system`
+- `GET /api/ws` (websocket handshake + `subscribe` events)
+
+V1 compatibility:
+
+- `GET /api/v1/data`
+- `GET /api/v1/system`
+- `GET /api/v1/telegram`
+
+Dev-only helpers:
+
+- `GET /sim/state`
+- `PUT /sim/api_enabled` with JSON body `{"enabled": false}` to simulate API-disabled responses (`403`).
+- `PUT /sim/v2_auto_authorize` with JSON body `{"enabled": false}` to simulate the v2 "button not pressed" path (`403 user:creation-not-enabled`).
+
+Note:
+The devcontainer sets `HOMEWIZARD_INSTANT_ALLOW_INSECURE_V2=1` for `dummy-p1` so
+the integration can use the simulator's self-signed TLS certificate in development.
+
 ## Supported devices
 
 - HomeWizard **P1 meters** only.

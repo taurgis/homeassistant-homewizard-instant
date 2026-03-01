@@ -24,6 +24,7 @@ from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import DOMAIN, LOGGER, UPDATE_INTERVAL
+from .v2_dev_ssl import allow_insecure_v2_for_host
 
 type HomeWizardConfigEntry = ConfigEntry[HWEnergyDeviceUpdateCoordinator]
 
@@ -350,6 +351,18 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
     async def _async_get_ws_ssl_context(self) -> ssl.SSLContext:
         """Build and cache SSL context used for websocket v2 endpoint."""
         if self._ws_ssl_context is not None:
+            return self._ws_ssl_context
+
+        if allow_insecure_v2_for_host(self.api.host):
+            def _build_insecure_context() -> ssl.SSLContext:
+                context = ssl.create_default_context()
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
+                return context
+
+            self._ws_ssl_context = await self.hass.async_add_executor_job(
+                _build_insecure_context
+            )
             return self._ws_ssl_context
 
         def _build_context() -> ssl.SSLContext:
