@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import calendar
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
@@ -12,6 +13,8 @@ import threading
 import time
 from typing import Any
 from zoneinfo import ZoneInfo
+
+from .constants import DEFAULT_HOUSEHOLD_YEARLY_KWH
 
 
 @dataclass(slots=True)
@@ -46,6 +49,75 @@ def rssi_to_strength(rssi_db: int) -> int:
 class P1Simulation:
     """Stateful 1 Hz simulation model for v1/v2 endpoints."""
 
+    # Proxy factors derived from Belgian 2025 Elia total-load ratios and tuned for
+    # household simulation scaling. Means are near 1.0 across a full week/year.
+    _WEEKDAY_HOURLY_LOAD_FACTORS = (
+        0.854,
+        0.838,
+        0.837,
+        0.858,
+        0.918,
+        1.008,
+        1.083,
+        1.134,
+        1.158,
+        1.165,
+        1.160,
+        1.144,
+        1.125,
+        1.100,
+        1.082,
+        1.086,
+        1.109,
+        1.114,
+        1.085,
+        1.047,
+        1.012,
+        0.976,
+        0.935,
+        0.892,
+    )
+    _WEEKEND_HOURLY_LOAD_FACTORS = (
+        0.834,
+        0.814,
+        0.804,
+        0.802,
+        0.816,
+        0.845,
+        0.884,
+        0.933,
+        0.977,
+        1.008,
+        1.027,
+        1.020,
+        0.994,
+        0.968,
+        0.952,
+        0.959,
+        0.992,
+        1.012,
+        0.996,
+        0.972,
+        0.943,
+        0.914,
+        0.880,
+        0.842,
+    )
+    _MONTHLY_LOAD_FACTORS = (
+        1.140,
+        1.127,
+        0.991,
+        0.950,
+        0.917,
+        0.933,
+        0.915,
+        0.929,
+        0.976,
+        1.001,
+        1.032,
+        1.098,
+    )
+
     def __init__(
         self,
         *,
@@ -56,6 +128,7 @@ class P1Simulation:
         serial: str,
         api_enabled: bool,
         v2_auto_authorize: bool,
+        household_yearly_kwh: float = DEFAULT_HOUSEHOLD_YEARLY_KWH,
     ) -> None:
         self._rng = random.Random(seed)
         self._lock = threading.Lock()
@@ -65,6 +138,13 @@ class P1Simulation:
         self._tz = ZoneInfo(timezone_name)
         self._latitude_rad = math.radians(latitude)
         self._pv_peak_w = max(0.0, pv_peak_w)
+        self._household_yearly_kwh = clamp(household_yearly_kwh, 1200.0, 9000.0)
+        self._average_household_power_w = self._household_yearly_kwh * 1000.0 / 8760.0
+        weekday_mean = sum(self._WEEKDAY_HOURLY_LOAD_FACTORS) / 24.0
+        weekend_mean = sum(self._WEEKEND_HOURLY_LOAD_FACTORS) / 24.0
+        weekly_mean = ((5.0 * weekday_mean) + (2.0 * weekend_mean)) / 7.0
+        yearly_month_mean = sum(self._MONTHLY_LOAD_FACTORS) / 12.0
+        self._load_profile_normalization = max(0.001, weekly_mean * yearly_month_mean)
         self._serial = serial
         self._api_enabled = api_enabled
         self._v2_auto_authorize = v2_auto_authorize
@@ -99,6 +179,9 @@ class P1Simulation:
         self._last_sample_dt = now
         self._last_load_w = 0.0
         self._last_solar_w = 0.0
+        self._last_hourly_load_factor = 1.0
+        self._last_seasonal_load_factor = 1.0
+        self._last_combined_load_factor = 1.0
 
         self._token_by_name: dict[str, str] = {}
         self._name_by_token: dict[str, str] = {}
@@ -173,8 +256,8 @@ class P1Simulation:
 
         seasonal_solar = self._seasonal_solar_factor(day_of_year)
         load_w = self._simulate_household_load_w(
+            now=now,
             hour=hour,
-            seasonal_solar=seasonal_solar,
             weekend=weekend,
             dt_s=dt_s,
         )
@@ -328,6 +411,29 @@ class P1Simulation:
         }
         self._last_sample_dt = now
 
+    def _interpolate_hourly_load_factor(self, *, hour: float, weekend: bool) -> float:
+        """Return linearly interpolated hourly factor for smooth transitions."""
+        factors = (
+            self._WEEKEND_HOURLY_LOAD_FACTORS
+            if weekend
+            else self._WEEKDAY_HOURLY_LOAD_FACTORS
+        )
+        hour_index = int(hour) % 24
+        next_index = (hour_index + 1) % 24
+        fraction = clamp(hour - float(hour_index), 0.0, 1.0)
+        return (factors[hour_index] * (1.0 - fraction)) + (factors[next_index] * fraction)
+
+    def _interpolate_monthly_load_factor(self, *, now: datetime, hour: float) -> float:
+        """Return month factor with in-month interpolation (day-of-year aware)."""
+        month_index = now.month - 1
+        next_month_index = (month_index + 1) % 12
+        days_in_month = max(1, calendar.monthrange(now.year, now.month)[1])
+        month_progress = ((now.day - 1) + (hour / 24.0)) / float(days_in_month)
+        month_progress = clamp(month_progress, 0.0, 1.0)
+        current = self._MONTHLY_LOAD_FACTORS[month_index]
+        nxt = self._MONTHLY_LOAD_FACTORS[next_month_index]
+        return (current * (1.0 - month_progress)) + (nxt * month_progress)
+
     def _seasonal_solar_factor(self, day_of_year: int) -> float:
         """Return seasonality factor with summer high and winter low output."""
         return clamp(math.sin((2 * math.pi * (day_of_year - 80)) / 365), 0.12, 1.0)
@@ -335,32 +441,51 @@ class P1Simulation:
     def _simulate_household_load_w(
         self,
         *,
+        now: datetime,
         hour: float,
-        seasonal_solar: float,
         weekend: bool,
         dt_s: float,
     ) -> float:
-        """Simulate import demand profile with realistic daily behavior."""
-        morning_peak = 420 * gaussian(hour, 7.3, 1.2)
-        evening_peak = 760 * gaussian(hour, 19.2, 2.2)
-        midday_dip = -120 * gaussian(hour, 13.0, 2.3)
-        night_drop = -90 * gaussian(hour, 3.0, 2.0)
+        """Simulate import demand using Belgian-style hourly and seasonal factors."""
+        hourly_factor = self._interpolate_hourly_load_factor(hour=hour, weekend=weekend)
+        seasonal_factor = self._interpolate_monthly_load_factor(now=now, hour=hour)
+        profile_factor = (
+            (hourly_factor * seasonal_factor) / self._load_profile_normalization
+        )
 
-        base_load = 260 + 110 * (1.0 - seasonal_solar)
-        weekend_boost = 80 if weekend else 0
+        self._last_hourly_load_factor = hourly_factor
+        self._last_seasonal_load_factor = seasonal_factor
+        self._last_combined_load_factor = profile_factor
 
-        activity = 0.25 + 0.45 * gaussian(hour, 7.5, 1.4) + 0.6 * gaussian(hour, 19.0, 2.0)
+        base_load = self._average_household_power_w * profile_factor
+        occupancy_tweak = (
+            45.0 * gaussian(hour, 6.9, 1.3)
+            + 60.0 * gaussian(hour, 19.4, 2.1)
+            - 35.0 * gaussian(hour, 13.5, 2.6)
+            - 20.0 * gaussian(hour, 2.5, 2.2)
+        )
+        weekend_tweak = (
+            25.0 * gaussian(hour, 11.0, 3.2) - 10.0 * gaussian(hour, 7.0, 1.4)
+            if weekend
+            else 0.0
+        )
+
+        activity = clamp(
+            0.14 + 0.30 * profile_factor + 0.16 * gaussian(hour, 19.2, 2.0),
+            0.04,
+            1.30,
+        )
         spike_probability = (0.004 + 0.018 * activity) * dt_s
         if self._rng.random() < spike_probability:
             profile = self._rng.choices(
                 [
-                    (1500, 80),
-                    (2200, 25),
-                    (900, 420),
-                    (400, 1500),
-                    (2800, 12),
+                    (1300, 120),
+                    (2000, 55),
+                    (950, 450),
+                    (420, 1500),
+                    (3000, 10),
                 ],
-                weights=[25, 18, 30, 16, 11],
+                weights=[26, 21, 28, 15, 10],
                 k=1,
             )[0]
             watts, duration_s = profile
@@ -376,18 +501,15 @@ class P1Simulation:
                 spike_load_w += spike.watts
         self._spikes = retained_spikes
 
-        random_noise = self._rng.gauss(0.0, 22.0)
+        random_noise = self._rng.gauss(0.0, 16.0)
         load_w = (
             base_load
-            + morning_peak
-            + evening_peak
-            + midday_dip
-            + night_drop
-            + weekend_boost
+            + occupancy_tweak
+            + weekend_tweak
             + spike_load_w
             + random_noise
         )
-        return max(120.0, load_w)
+        return max(110.0, load_w)
 
     def _simulate_solar_generation_w(
         self,
@@ -608,4 +730,8 @@ class P1Simulation:
                 "latest_power_w": self._measurement_v1_payload.get("active_power_w"),
                 "latest_load_w": round(self._last_load_w, 1),
                 "latest_solar_w": round(self._last_solar_w, 1),
+                "household_yearly_kwh": round(self._household_yearly_kwh, 1),
+                "hourly_load_factor": round(self._last_hourly_load_factor, 3),
+                "seasonal_load_factor": round(self._last_seasonal_load_factor, 3),
+                "combined_load_factor": round(self._last_combined_load_factor, 3),
             }

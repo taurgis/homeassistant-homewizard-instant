@@ -12,6 +12,7 @@ from .api import create_app
 from .constants import (
     DEFAULT_CERT_FILE,
     DEFAULT_HOST,
+    DEFAULT_HOUSEHOLD_YEARLY_KWH,
     DEFAULT_KEY_FILE,
     DEFAULT_LATITUDE,
     DEFAULT_PORT,
@@ -59,6 +60,15 @@ def parse_args() -> argparse.Namespace:
         help="Installed PV peak production in watts",
     )
     parser.add_argument(
+        "--household-yearly-kwh",
+        type=float,
+        default=DEFAULT_HOUSEHOLD_YEARLY_KWH,
+        help=(
+            "Annual household consumption target used for load profile scaling "
+            "(default: Belgian average reference)"
+        ),
+    )
+    parser.add_argument(
         "--serial",
         default=DEFAULT_SERIAL,
         help="Device serial returned by /api",
@@ -104,6 +114,7 @@ def main() -> None:
         timezone_name=args.timezone,
         latitude=args.latitude,
         pv_peak_w=args.pv_peak_w,
+        household_yearly_kwh=args.household_yearly_kwh,
         serial=args.serial,
         api_enabled=parse_bool(args.api_enabled),
         v2_auto_authorize=parse_bool(args.v2_auto_authorize),

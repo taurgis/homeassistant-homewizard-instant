@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 from aiohttp.test_utils import TestClient
@@ -116,3 +118,60 @@ async def test_v2_websocket_auth_and_subscription(dummy_client: TestClient) -> N
     assert event["data"] == {}
 
     await ws.close()
+
+
+def test_load_profile_has_hourly_and_day_of_year_shape() -> None:
+    """Validate Belgian-inspired hourly and seasonal load factors are applied."""
+    simulation = P1Simulation(
+        seed=123,
+        timezone_name="Europe/Amsterdam",
+        latitude=52.3676,
+        pv_peak_w=0,
+        serial="P1SIMTEST",
+        api_enabled=True,
+        v2_auto_authorize=True,
+    )
+
+    weekday_night = simulation._interpolate_hourly_load_factor(hour=2.0, weekend=False)
+    weekday_morning = simulation._interpolate_hourly_load_factor(hour=9.0, weekend=False)
+    weekend_morning = simulation._interpolate_hourly_load_factor(hour=9.0, weekend=True)
+
+    assert weekday_morning > weekday_night
+    assert weekday_morning > weekend_morning
+
+    tz = ZoneInfo("Europe/Amsterdam")
+    january_factor = simulation._interpolate_monthly_load_factor(
+        now=datetime(2026, 1, 15, 12, 0, tzinfo=tz),
+        hour=12.0,
+    )
+    july_factor = simulation._interpolate_monthly_load_factor(
+        now=datetime(2026, 7, 15, 12, 0, tzinfo=tz),
+        hour=12.0,
+    )
+
+    assert january_factor > july_factor
+
+
+def test_month_factor_interpolation_is_smooth_across_boundaries() -> None:
+    """Ensure the month profile does not jump abruptly on day transitions."""
+    simulation = P1Simulation(
+        seed=123,
+        timezone_name="Europe/Amsterdam",
+        latitude=52.3676,
+        pv_peak_w=0,
+        serial="P1SIMTEST",
+        api_enabled=True,
+        v2_auto_authorize=True,
+    )
+
+    tz = ZoneInfo("Europe/Amsterdam")
+    jan_end = simulation._interpolate_monthly_load_factor(
+        now=datetime(2026, 1, 31, 23, 0, tzinfo=tz),
+        hour=23.0,
+    )
+    feb_start = simulation._interpolate_monthly_load_factor(
+        now=datetime(2026, 2, 1, 0, 0, tzinfo=tz),
+        hour=0.0,
+    )
+
+    assert abs(jan_end - feb_start) < 0.02
