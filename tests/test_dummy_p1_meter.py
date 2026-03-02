@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator
 from datetime import datetime
 from ipaddress import IPv4Address
@@ -10,7 +11,7 @@ from unittest.mock import AsyncMock, Mock
 from zoneinfo import ZoneInfo
 
 import pytest
-from aiohttp import web
+from aiohttp import WSMsgType, web
 from aiohttp.test_utils import TestClient
 
 from tools.dummy_p1_meter import P1Simulation, create_app
@@ -140,6 +141,81 @@ async def test_broadcast_topic_closes_stale_client_on_send_failure() -> None:
 
     ws.close.assert_awaited_once()
     assert ws not in app["ws_clients"]
+
+
+async def test_websocket_ignores_unknown_subscriptions(dummy_client: TestClient) -> None:
+    """Ensure unknown subscription topics are ignored to keep memory bounded."""
+    token_response = await dummy_client.post("/api/user", json={"name": "local/unknown-sub"})
+    token_payload = await token_response.json()
+    token = token_payload["token"]
+
+    ws = await dummy_client.ws_connect("/api/ws")
+    await ws.receive_json(timeout=2)
+    await ws.send_json({"type": "authorization", "data": token})
+    assert await ws.receive_json(timeout=2) == {"type": "authorized"}
+
+    for idx in range(64):
+        await ws.send_json({"type": "subscribe", "data": f"unknown-{idx}"})
+
+    await ws.send_json({"type": "subscribe", "data": "measurement"})
+    subscriptions: set[str] = set()
+    for _ in range(50):
+        await asyncio.sleep(0.01)
+        subscriptions = next(iter(dummy_client.app["ws_clients"].values()))
+        if "measurement" in subscriptions:
+            break
+
+    assert subscriptions == {"measurement"}
+
+    await ws.close()
+
+
+async def test_websocket_subscription_limit_closes_connection(
+    dummy_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ensure per-client subscription limits close abusive websocket sessions."""
+    monkeypatch.setattr(
+        "tools.dummy_p1_meter.api.WS_MAX_SUBSCRIPTIONS_PER_CLIENT",
+        1,
+    )
+
+    token_response = await dummy_client.post("/api/user", json={"name": "local/sub-limit"})
+    token_payload = await token_response.json()
+    token = token_payload["token"]
+
+    ws = await dummy_client.ws_connect("/api/ws")
+    await ws.receive_json(timeout=2)
+    await ws.send_json({"type": "authorization", "data": token})
+    assert await ws.receive_json(timeout=2) == {"type": "authorized"}
+
+    await ws.send_json({"type": "subscribe", "data": "measurement"})
+    await ws.send_json({"type": "subscribe", "data": "system"})
+
+    error = await ws.receive_json(timeout=2)
+    assert error == {"type": "error", "data": {"message": "too-many-subscriptions"}}
+
+    closed = await ws.receive(timeout=2)
+    assert closed.type in {WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.CLOSING}
+
+
+async def test_websocket_repeated_connect_disconnect_cleans_client_registry(
+    dummy_client: TestClient,
+) -> None:
+    """Ensure repeated websocket sessions do not accumulate tracked clients."""
+    token_response = await dummy_client.post("/api/user", json={"name": "local/loop"})
+    token_payload = await token_response.json()
+    token = token_payload["token"]
+
+    for _ in range(40):
+        ws = await dummy_client.ws_connect("/api/ws")
+        await ws.receive_json(timeout=2)
+        await ws.send_json({"type": "authorization", "data": token})
+        assert await ws.receive_json(timeout=2) == {"type": "authorized"}
+        await ws.send_json({"type": "subscribe", "data": "measurement"})
+        await ws.close()
+
+    await asyncio.sleep(0)
+    assert dummy_client.app["ws_clients"] == {}
 
 
 def test_token_store_is_bounded_for_long_running_sessions() -> None:

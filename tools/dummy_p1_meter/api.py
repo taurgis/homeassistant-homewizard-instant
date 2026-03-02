@@ -10,6 +10,11 @@ from aiohttp import WSMsgType, web
 
 from .simulation import P1Simulation
 
+WS_ALLOWED_SUBSCRIPTIONS = frozenset({"*", "measurement", "device", "system", "batteries"})
+WS_MAX_SUBSCRIPTIONS_PER_CLIENT = 8
+WS_SEND_TIMEOUT_SECONDS = 1.0
+WS_MAX_CONCURRENT_SENDS = 16
+
 
 def json_response(payload: dict[str, Any], status: int = 200) -> web.Response:
     """Create compact JSON response."""
@@ -60,6 +65,18 @@ async def broadcast_topic(app: web.Application, topic: str) -> None:
     """Broadcast websocket event to clients subscribed to topic."""
     clients: dict[web.WebSocketResponse, set[str]] = app["ws_clients"]
     stale: list[web.WebSocketResponse] = []
+    targets: list[web.WebSocketResponse] = []
+    semaphore = asyncio.Semaphore(WS_MAX_CONCURRENT_SENDS)
+
+    async def _send_with_timeout(ws: web.WebSocketResponse) -> bool:
+        """Send a topic event frame with timeout and bounded concurrency."""
+        try:
+            async with semaphore:
+                async with asyncio.timeout(WS_SEND_TIMEOUT_SECONDS):
+                    await ws.send_json({"type": topic, "data": {}})
+            return True
+        except Exception:
+            return False
 
     for ws, subscriptions in list(clients.items()):
         if ws.closed:
@@ -69,10 +86,16 @@ async def broadcast_topic(app: web.Application, topic: str) -> None:
         if topic not in subscriptions and "*" not in subscriptions:
             continue
 
-        try:
-            await ws.send_json({"type": topic, "data": {}})
-        except Exception:
-            stale.append(ws)
+        targets.append(ws)
+
+    if targets:
+        send_results = await asyncio.gather(
+            *(_send_with_timeout(ws) for ws in targets),
+            return_exceptions=False,
+        )
+        for ws, sent in zip(targets, send_results, strict=True):
+            if not sent:
+                stale.append(ws)
 
     for ws in stale:
         clients.pop(ws, None)
@@ -261,7 +284,24 @@ class DummyP1Api:
 
                 body = parse_json_dict(message.data)
                 if body.get("type") == "subscribe" and isinstance(body.get("data"), str):
-                    subscriptions.add(body["data"])
+                    topic = body["data"]
+                    if topic not in WS_ALLOWED_SUBSCRIPTIONS:
+                        continue
+
+                    if (
+                        len(subscriptions) >= WS_MAX_SUBSCRIPTIONS_PER_CLIENT
+                        and topic not in subscriptions
+                    ):
+                        await ws.send_json(
+                            {
+                                "type": "error",
+                                "data": {"message": "too-many-subscriptions"},
+                            }
+                        )
+                        await ws.close()
+                        break
+
+                    subscriptions.add(topic)
                 elif body.get("type") == "authorization":
                     candidate = body.get("data")
                     if not isinstance(candidate, str) or not self.simulation.is_valid_token(candidate):
