@@ -96,9 +96,6 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
         if device_info.product_type not in SUPPORTED_PRODUCT_TYPES:
             return "device_not_supported"
 
-        if device_info.serial is None:
-            return "unknown_error"
-
         return None
 
     async def _async_validate_and_set_unique_id(

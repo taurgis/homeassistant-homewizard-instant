@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock
 from homeassistant.const import CONF_IP_ADDRESS
 
 from custom_components.homewizard_instant.diagnostics import (
+    REDACTED,
+    _redact_by_key_pattern,
     _serialize_data,
     async_get_config_entry_diagnostics,
 )
@@ -85,3 +87,26 @@ def test_serialize_data_fallback() -> None:
     """Test _serialize_data fallback wraps value."""
 
     assert _serialize_data(123) == {"value": 123}
+
+
+def test_redact_by_key_pattern_redacts_nested_sensitive_keys() -> None:
+    """Test key-pattern redaction catches nested token and host style fields."""
+    payload = {
+        "safe": "value",
+        "nested": {
+            "api_token": "secret",
+            "host_name": "p1.local",
+            "items": [
+                {"serial_number": "ABC123"},
+                {"ok": True},
+            ],
+        },
+    }
+
+    redacted = _redact_by_key_pattern(payload)
+
+    assert redacted["safe"] == "value"
+    assert redacted["nested"]["api_token"] == REDACTED
+    assert redacted["nested"]["host_name"] == REDACTED
+    assert redacted["nested"]["items"][0]["serial_number"] == REDACTED
+    assert redacted["nested"]["items"][1]["ok"] is True
