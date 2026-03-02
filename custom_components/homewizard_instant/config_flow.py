@@ -20,7 +20,6 @@ import voluptuous as vol
 from homeassistant.components import onboarding
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_IP_ADDRESS, CONF_TOKEN
-from homeassistant.data_entry_flow import AbortFlow
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import instance_id
@@ -109,9 +108,12 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
         if (abort_reason := self._device_validation_error(device_info)) is not None:
             return self.async_abort(reason=abort_reason)
 
-        assert device_info.serial is not None
+        serial = device_info.serial
+        if serial is None:
+            return self.async_abort(reason="unknown_error")
+
         await self.async_set_unique_id(
-            self._entry_unique_id(device_info.product_type, device_info.serial)
+            self._entry_unique_id(device_info.product_type, serial)
         )
         return None
 
@@ -469,10 +471,6 @@ async def async_try_connect(
     except asyncio.CancelledError:
         raise
 
-    except Exception as ex:
-        LOGGER.exception("Unexpected exception")
-        raise AbortFlow("unknown_error") from ex
-
     finally:
         await energy_api.close()
 
@@ -509,9 +507,6 @@ async def async_request_token(
         ) from ex
     except asyncio.CancelledError:
         raise
-    except Exception as ex:
-        LOGGER.exception("Unexpected exception")
-        raise AbortFlow("unknown_error") from ex
     finally:
         await api.close()
 

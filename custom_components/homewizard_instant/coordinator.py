@@ -214,6 +214,7 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
                 LOGGER.debug("HomeWizard websocket disconnected: %s", err)
             except Exception:  # pylint: disable=broad-except
                 LOGGER.exception("Unexpected HomeWizard websocket error")
+                raise
             finally:
                 self._ws_connected = False
 

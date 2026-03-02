@@ -550,7 +550,7 @@ async def test_websocket_loop_retries_after_updatefailed(hass, mock_config_entry
 
 
 async def test_websocket_loop_logs_unexpected_exception(hass, mock_config_entry):
-    """Test websocket loop catches and logs unexpected exceptions."""
+    """Test websocket loop logs and re-raises unexpected exceptions."""
     mock_config_entry.add_to_hass(hass)
 
     coordinator = HWEnergyDeviceUpdateCoordinator(
@@ -562,16 +562,39 @@ async def test_websocket_loop_logs_unexpected_exception(hass, mock_config_entry)
     )
     coordinator._async_websocket_session = AsyncMock(side_effect=RuntimeError("boom"))
 
-    async def _sleep(_delay: float) -> None:
-        coordinator._ws_stop_event.set()
-
     with (
-        patch("custom_components.homewizard_instant.coordinator.asyncio.sleep", new=AsyncMock(side_effect=_sleep)),
         patch("custom_components.homewizard_instant.coordinator.LOGGER.exception") as log_exception,
     ):
-        await coordinator._async_websocket_loop()
+        with pytest.raises(RuntimeError, match="boom"):
+            await coordinator._async_websocket_loop()
 
     log_exception.assert_called_once()
+
+
+async def test_ws_ssl_context_uses_insecure_mode_when_enabled(
+    hass, mock_config_entry
+):
+    """Test websocket SSL context disables verification in insecure dev mode."""
+    mock_config_entry.add_to_hass(hass)
+
+    api = AsyncMock()
+    api.host = "dummy-p1.local"
+
+    coordinator = HWEnergyDeviceUpdateCoordinator(
+        hass,
+        mock_config_entry,
+        api,
+        clientsession=AsyncMock(),
+        ws_token="token123",
+    )
+
+    with patch(
+        "custom_components.homewizard_instant.coordinator.allow_insecure_v2_for_host",
+        return_value=True,
+    ):
+        context = await coordinator._async_get_ws_ssl_context()
+
+    assert context.check_hostname is False
 
 
 async def test_websocket_session_requires_token(hass, mock_config_entry):

@@ -121,18 +121,16 @@ async def test_async_try_connect_unauthorized_error(hass) -> None:
 
 
 async def test_async_try_connect_unexpected_error(hass) -> None:
-    """Test async_try_connect aborts on unexpected error."""
+    """Test async_try_connect propagates unexpected errors."""
     mock_api = AsyncMock()
     mock_api.device = AsyncMock(side_effect=Exception("boom"))
     mock_api.close = AsyncMock()
-
-    from homeassistant.data_entry_flow import AbortFlow
 
     with patch(
         "custom_components.homewizard_instant.config_flow.HomeWizardEnergyV1",
         return_value=mock_api,
     ):
-        with pytest.raises(AbortFlow):
+        with pytest.raises(Exception, match="boom"):
             await async_try_connect(hass, "1.2.3.4", clientsession=AsyncMock())
 
     mock_api.close.assert_awaited_once()
@@ -920,6 +918,26 @@ async def test_dhcp_serial_missing_aborts_unknown(hass) -> None:
     assert result["reason"] == "unknown_error"
 
 
+async def test_dhcp_unauthorized_aborts_unknown_error(hass) -> None:
+    """Test dhcp flow aborts with unknown_error on unauthorized responses."""
+    discovery_info = DhcpServiceInfo(
+        ip="1.2.3.4",
+        hostname="hw",
+        macaddress="AA:BB:CC:DD:EE:FF",
+    )
+
+    with patch(
+        "custom_components.homewizard_instant.config_flow.async_try_connect",
+        side_effect=UnauthorizedError("unauthorized"),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": "dhcp"}, data=discovery_info
+        )
+
+    assert result["type"] == FlowResultType.ABORT
+    assert result["reason"] == "unknown_error"
+
+
 async def test_discovery_confirm_error(hass) -> None:
     """Test discovery confirm shows errors on connection failure."""
     discovery_info = ZeroconfServiceInfo(
@@ -950,6 +968,17 @@ async def test_discovery_confirm_error(hass) -> None:
 
     assert result2["type"] == FlowResultType.FORM
     assert result2["errors"] == {"base": "network_error"}
+
+
+async def test_discovery_confirm_missing_context_aborts_unknown_error(hass) -> None:
+    """Test discovery confirm aborts if required discovery state is missing."""
+    flow = HomeWizardConfigFlow()
+    flow.hass = hass
+
+    result = await flow.async_step_discovery_confirm()
+
+    assert result["type"] == FlowResultType.ABORT
+    assert result["reason"] == "unknown_error"
 
 
 def test_serial_helpers() -> None:
@@ -1045,9 +1074,8 @@ async def test_async_request_token_cancelled_error(hass) -> None:
     mock_api.close.assert_awaited_once()
 
 
-async def test_async_request_token_unexpected_error_aborts(hass) -> None:
-    """Test async_request_token converts unexpected errors to AbortFlow."""
-    from homeassistant.data_entry_flow import AbortFlow
+async def test_async_request_token_unexpected_error_raises(hass) -> None:
+    """Test async_request_token propagates unexpected errors."""
 
     mock_api = AsyncMock()
     mock_api.get_token = AsyncMock(side_effect=Exception("boom"))
@@ -1063,7 +1091,7 @@ async def test_async_request_token_unexpected_error_aborts(hass) -> None:
             new=AsyncMock(return_value="abcdef123456"),
         ),
     ):
-        with pytest.raises(AbortFlow):
+        with pytest.raises(Exception, match="boom"):
             await async_request_token(hass, "1.2.3.4", clientsession=AsyncMock())
 
     mock_api.close.assert_awaited_once()
