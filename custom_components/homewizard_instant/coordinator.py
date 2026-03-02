@@ -3,16 +3,30 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from collections import deque
 from ipaddress import ip_address
 import json
 import random
 import ssl
 from time import monotonic
+from typing import Any
 
-from aiohttp import ClientError, ClientSession, ClientWebSocketResponse, WSMessage, WSMsgType
-from homewizard_energy import HomeWizardEnergy
-from homewizard_energy.errors import DisabledError, RequestError, UnauthorizedError
+from aiohttp import (
+    ClientError,
+    ClientSession,
+    ClientWebSocketResponse,
+    ClientWSTimeout,
+    WSMessage,
+    WSMsgType,
+)
+from homewizard_energy import HomeWizardEnergy, HomeWizardEnergyV1
+from homewizard_energy.errors import (
+    DisabledError,
+    RequestError,
+    UnauthorizedError,
+    UnsupportedError,
+)
 from homewizard_energy.models import CombinedModels as DeviceResponseEntry
 from homewizard_energy.v2 import HomeWizardEnergyV2
 from homewizard_energy.v2.cacert import CACERT
@@ -29,6 +43,8 @@ from .v2_dev_ssl import allow_insecure_v2_for_host
 type HomeWizardConfigEntry = ConfigEntry[HWEnergyDeviceUpdateCoordinator]
 
 WS_AUTH_TIMEOUT = 40
+WS_CONNECT_TIMEOUT = 15
+WS_CLOSE_TIMEOUT = 10
 WS_RECEIVE_TIMEOUT = 90
 WS_INITIAL_RETRY_DELAY = 1.0
 WS_MAX_RETRY_DELAY = 60.0
@@ -151,7 +167,10 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
     async def _async_fetch_combined_data(self) -> DeviceResponseEntry:
         """Fetch combined data and map library errors to HA errors."""
         try:
-            data = await self.api.combined()
+            if isinstance(self.api, HomeWizardEnergyV1):
+                data = await self._async_fetch_v1_combined_data_sequential()
+            else:
+                data = await self.api.combined()
 
         except RequestError as ex:
             raise UpdateFailed(
@@ -170,6 +189,31 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
 
         self._clear_api_disabled_issue()
         return data
+
+    async def _async_fetch_v1_combined_data_sequential(self) -> DeviceResponseEntry:
+        """Fetch v1 endpoints sequentially to avoid parallel per-host requests."""
+
+        async def _fetch_optional(
+            fetcher: Callable[[], Awaitable[Any]],
+        ) -> Any | None:
+            try:
+                return await fetcher()
+            except (UnsupportedError, NotImplementedError):
+                return None
+
+        device = await self.api.device()
+        measurement = await self.api.measurement()
+        system = await _fetch_optional(self.api.system)
+        state = await _fetch_optional(self.api.state)
+        batteries = await _fetch_optional(self.api.batteries)
+
+        return DeviceResponseEntry(
+            device=device,
+            measurement=measurement,
+            system=system,
+            state=state,
+            batteries=batteries,
+        )
 
     def _set_api_disabled_issue(self) -> None:
         """Create disabled API issue and schedule reauth recovery."""
@@ -240,12 +284,19 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
         websocket_url = f"wss://{self.api.host}/api/ws"
         ssl_context = await self._async_get_ws_ssl_context()
 
-        async with self._clientsession.ws_connect(
-            websocket_url,
-            ssl=ssl_context,
-            heartbeat=30,
-            server_hostname=self.api.host if ssl_context.check_hostname else None,
-        ) as websocket:
+        try:
+            async with asyncio.timeout(WS_CONNECT_TIMEOUT):
+                websocket = await self._clientsession.ws_connect(
+                    websocket_url,
+                    ssl=ssl_context,
+                    heartbeat=30,
+                    timeout=ClientWSTimeout(ws_close=WS_CLOSE_TIMEOUT),
+                    server_hostname=self.api.host if ssl_context.check_hostname else None,
+                )
+        except TimeoutError as err:
+            raise UpdateFailed("WebSocket connect timeout") from err
+
+        try:
             await self._async_authorize_websocket(websocket)
 
             for topic in WS_SUBSCRIPTIONS:
@@ -272,6 +323,8 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
 
                 if event_type in WS_REFRESH_EVENTS:
                     await self._async_refresh_from_websocket(event_type)
+        finally:
+            await websocket.close()
 
     async def _async_authorize_websocket(
         self, websocket: ClientWebSocketResponse

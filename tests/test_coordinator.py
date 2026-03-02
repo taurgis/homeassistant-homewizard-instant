@@ -9,8 +9,9 @@ from time import monotonic
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
-from aiohttp import WSMsgType
-from homewizard_energy.errors import DisabledError, RequestError
+from aiohttp import ClientWSTimeout, WSMsgType
+from homewizard_energy import HomeWizardEnergyV1
+from homewizard_energy.errors import DisabledError, RequestError, UnsupportedError
 from homewizard_energy.v2 import HomeWizardEnergyV2
 
 from homeassistant.exceptions import ConfigEntryAuthFailed
@@ -20,6 +21,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.homewizard_instant.coordinator import (
     HWEnergyDeviceUpdateCoordinator,
+    WS_CONNECT_TIMEOUT,
     WS_SUBSCRIPTIONS,
 )
 from custom_components.homewizard_instant.const import DOMAIN
@@ -216,6 +218,85 @@ async def test_coordinator_unauthorized_error_raises_auth_failed(
 
     with pytest.raises(ConfigEntryAuthFailed):
         await coordinator._async_update_data()
+
+
+async def test_coordinator_v1_fetches_endpoints_sequentially(
+    hass, mock_config_entry, mock_combined_data
+):
+    """Test v1 updates fetch endpoints one-by-one to limit socket pressure."""
+
+    device_result = mock_combined_data.device
+    measurement_result = SimpleNamespace(wifi_ssid=None, wifi_strength=None)
+    system_result = mock_combined_data.system
+
+    class _FakeV1Api(HomeWizardEnergyV1):
+        def __init__(self) -> None:
+            super().__init__("1.2.3.4", clientsession=AsyncMock())
+            self.in_flight = 0
+            self.max_in_flight = 0
+            self.call_order: list[str] = []
+
+        async def _track(self, name: str, result=object(), *, unsupported=False):
+            self.call_order.append(name)
+            self.in_flight += 1
+            self.max_in_flight = max(self.max_in_flight, self.in_flight)
+            await asyncio.sleep(0)
+            self.in_flight -= 1
+            if unsupported:
+                raise UnsupportedError(f"{name} unsupported")
+            return result
+
+        async def device(self, reset_cache: bool = False):
+            return await self._track("device", device_result)
+
+        async def measurement(self):
+            return await self._track("measurement", measurement_result)
+
+        async def system(
+            self,
+            cloud_enabled: bool | None = None,
+            status_led_brightness_pct: int | None = None,
+            api_v1_enabled: bool | None = None,
+        ):
+            return await self._track("system", system_result)
+
+        async def state(
+            self,
+            power_on: bool | None = None,
+            switch_lock: bool | None = None,
+            brightness: int | None = None,
+        ):
+            return await self._track("state", unsupported=True)
+
+        async def batteries(self, mode=None):
+            return await self._track("batteries", unsupported=True)
+
+    mock_config_entry.add_to_hass(hass)
+
+    api = _FakeV1Api()
+    coordinator = HWEnergyDeviceUpdateCoordinator(
+        hass,
+        mock_config_entry,
+        api,
+        clientsession=AsyncMock(),
+        ws_token=None,
+    )
+
+    data = await coordinator._async_update_data()
+
+    assert api.max_in_flight == 1
+    assert api.call_order == [
+        "device",
+        "measurement",
+        "system",
+        "state",
+        "batteries",
+    ]
+    assert data.device is device_result
+    assert data.measurement is measurement_result
+    assert data.system is system_result
+    assert data.state is None
+    assert data.batteries is None
 
 
 async def test_coordinator_skips_poll_fetch_when_websocket_is_healthy(
@@ -715,14 +796,7 @@ async def test_websocket_session_processes_events(hass, mock_config_entry):
 
     websocket = AsyncMock()
 
-    class _ConnectContext:
-        async def __aenter__(self):
-            return websocket
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-    coordinator._clientsession.ws_connect = Mock(return_value=_ConnectContext())
+    coordinator._clientsession.ws_connect = AsyncMock(return_value=websocket)
     coordinator._async_get_ws_ssl_context = AsyncMock(
         return_value=SimpleNamespace(check_hostname=True)
     )
@@ -742,6 +816,8 @@ async def test_websocket_session_processes_events(hass, mock_config_entry):
     assert websocket.send_json.await_count == len(WS_SUBSCRIPTIONS)
     coordinator._async_refresh_from_websocket.assert_any_await("connected")
     coordinator._async_refresh_from_websocket.assert_any_await("measurement")
+    ws_connect_kwargs = coordinator._clientsession.ws_connect.call_args.kwargs
+    assert ws_connect_kwargs["timeout"] == ClientWSTimeout(ws_close=10)
 
 
 async def test_websocket_session_raises_on_unauthorized_event(
@@ -763,14 +839,7 @@ async def test_websocket_session_raises_on_unauthorized_event(
 
     websocket = AsyncMock()
 
-    class _ConnectContext:
-        async def __aenter__(self):
-            return websocket
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-    coordinator._clientsession.ws_connect = Mock(return_value=_ConnectContext())
+    coordinator._clientsession.ws_connect = AsyncMock(return_value=websocket)
     coordinator._async_get_ws_ssl_context = AsyncMock(
         return_value=SimpleNamespace(check_hostname=False)
     )
@@ -782,6 +851,36 @@ async def test_websocket_session_raises_on_unauthorized_event(
 
     with pytest.raises(ConfigEntryAuthFailed):
         await coordinator._async_websocket_session()
+
+
+async def test_websocket_session_maps_connect_timeout_to_update_failed(
+    hass, mock_config_entry
+):
+    """Test websocket connect timeout is mapped to UpdateFailed."""
+    mock_config_entry.add_to_hass(hass)
+
+    api = AsyncMock()
+    api.host = "homewizard.local"
+
+    coordinator = HWEnergyDeviceUpdateCoordinator(
+        hass,
+        mock_config_entry,
+        api,
+        clientsession=AsyncMock(),
+        ws_token="token123",
+    )
+
+    coordinator._clientsession.ws_connect = AsyncMock(side_effect=TimeoutError)
+    coordinator._async_get_ws_ssl_context = AsyncMock(
+        return_value=SimpleNamespace(check_hostname=True)
+    )
+
+    with pytest.raises(UpdateFailed, match="WebSocket connect timeout"):
+        await coordinator._async_websocket_session()
+
+    ws_connect_kwargs = coordinator._clientsession.ws_connect.call_args.kwargs
+    assert ws_connect_kwargs["timeout"] == ClientWSTimeout(ws_close=10)
+    assert WS_CONNECT_TIMEOUT > 0
 
 
 async def test_websocket_authorize_requires_token(hass, mock_config_entry):
