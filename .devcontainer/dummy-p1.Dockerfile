@@ -4,4 +4,4 @@ FROM python:3.13-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends openssl ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
-    && python -m pip install --no-cache-dir aiohttp==3.12.15
+    && python -m pip install --no-cache-dir aiohttp==3.12.15 zeroconf==0.148.0

@@ -163,6 +163,10 @@ async def test_async_setup_entry_creates_migration_issue(hass, mock_config_entry
             new=AsyncMock(return_value=True),
         ),
         patch(
+            "custom_components.homewizard_instant.async_request_token",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
             "custom_components.homewizard_instant.async_get_clientsession",
             return_value=AsyncMock(),
         ),
@@ -184,6 +188,58 @@ async def test_async_setup_entry_creates_migration_issue(hass, mock_config_entry
     )
     assert issue is not None
     assert issue.translation_placeholders == {"title": mock_config_entry.title}
+
+
+async def test_async_setup_entry_promotes_tokenless_entry_to_v2(hass, mock_config_entry) -> None:
+    """Test setup upgrades tokenless v2-capable entries before creating coordinator."""
+    mock_config_entry.add_to_hass(hass)
+
+    mock_api = AsyncMock()
+    mock_api.close = AsyncMock()
+
+    with (
+        patch(
+            "custom_components.homewizard_instant.has_v2_api",
+            new=AsyncMock(return_value=True),
+        ),
+        patch(
+            "custom_components.homewizard_instant.async_request_token",
+            new=AsyncMock(return_value="new-token"),
+        ) as request_token,
+        patch(
+            "custom_components.homewizard_instant.HomeWizardEnergyV2",
+            return_value=mock_api,
+        ) as create_v2,
+        patch(
+            "custom_components.homewizard_instant.HomeWizardEnergyV1",
+        ) as create_v1,
+        patch(
+            "custom_components.homewizard_instant.async_get_clientsession",
+            return_value=AsyncMock(),
+        ),
+        patch(
+            "custom_components.homewizard_instant.HWEnergyDeviceUpdateCoordinator.async_config_entry_first_refresh",
+            new=AsyncMock(),
+        ),
+        patch.object(
+            hass.config_entries,
+            "async_forward_entry_setups",
+            return_value=True,
+        ),
+        patch.object(
+            hass.config_entries,
+            "async_update_entry",
+        ) as update_entry,
+    ):
+        assert await async_setup_entry(hass, mock_config_entry)
+
+    request_token.assert_awaited_once()
+    create_v2.assert_called_once()
+    create_v1.assert_not_called()
+    update_entry.assert_called_once_with(
+        mock_config_entry,
+        data={**mock_config_entry.data, CONF_TOKEN: "new-token"},
+    )
 
 
 async def test_async_setup_entry_with_token_skips_migration_issue(hass) -> None:

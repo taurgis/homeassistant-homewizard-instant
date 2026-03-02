@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 from datetime import datetime
+from ipaddress import IPv4Address
 import time
 from unittest.mock import AsyncMock, Mock
 from zoneinfo import ZoneInfo
@@ -14,6 +15,7 @@ from aiohttp.test_utils import TestClient
 
 from tools.dummy_p1_meter import P1Simulation, create_app
 from tools.dummy_p1_meter.api import broadcast_topic
+from tools.dummy_p1_meter.discovery import SERVICE_TYPES, ZeroconfPublisher
 
 pytestmark = pytest.mark.enable_socket
 
@@ -244,3 +246,84 @@ def test_simulation_can_restart_same_instance() -> None:
     simulation.stop()
 
     assert first_sample != second_sample
+
+
+def test_zeroconf_publisher_registers_homewizard_services(monkeypatch) -> None:
+    """Ensure simulator advertises both HomeWizard service types with expected TXT keys."""
+
+    created_infos: list[object] = []
+    zeroconf_instances: list[object] = []
+
+    class FakeServiceInfo:
+        """Capture ServiceInfo constructor inputs."""
+
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+            created_infos.append(self)
+
+    class FakeZeroconf:
+        """Capture registration lifecycle operations."""
+
+        def __init__(self) -> None:
+            self.registered: list[object] = []
+            self.unregistered: list[object] = []
+            self.closed = False
+            zeroconf_instances.append(self)
+
+        def register_service(self, info: object) -> None:
+            self.registered.append(info)
+
+        def unregister_service(self, info: object) -> None:
+            self.unregistered.append(info)
+
+        def close(self) -> None:
+            self.closed = True
+
+    monkeypatch.setattr("tools.dummy_p1_meter.discovery.ServiceInfo", FakeServiceInfo)
+    monkeypatch.setattr("tools.dummy_p1_meter.discovery.Zeroconf", FakeZeroconf)
+    monkeypatch.setattr(
+        "tools.dummy_p1_meter.discovery._resolve_ipv4_addresses",
+        lambda _: [IPv4Address("10.0.0.10")],
+    )
+
+    publisher = ZeroconfPublisher(
+        host="0.0.0.0",
+        port=15510,
+        product_name="P1 Meter",
+        product_type="HWE-P1",
+        serial="P1SIMTEST",
+    )
+
+    assert publisher.start() is True
+    assert len(created_infos) == len(SERVICE_TYPES)
+    advertised_types = {info.kwargs["type_"] for info in created_infos}
+    assert advertised_types == set(SERVICE_TYPES)
+    for info in created_infos:
+        assert info.kwargs["properties"] == {
+            "product_name": "P1 Meter",
+            "product_type": "HWE-P1",
+            "serial": "P1SIMTEST",
+        }
+
+    publisher.stop()
+    fake_zeroconf = zeroconf_instances[0]
+    assert len(fake_zeroconf.registered) == len(SERVICE_TYPES)
+    assert len(fake_zeroconf.unregistered) == len(SERVICE_TYPES)
+    assert fake_zeroconf.closed is True
+
+
+def test_zeroconf_publisher_handles_missing_dependency(monkeypatch) -> None:
+    """Ensure publisher degrades gracefully when zeroconf isn't installed."""
+    monkeypatch.setattr("tools.dummy_p1_meter.discovery.ServiceInfo", None)
+    monkeypatch.setattr("tools.dummy_p1_meter.discovery.Zeroconf", None)
+
+    publisher = ZeroconfPublisher(
+        host="0.0.0.0",
+        port=15510,
+        product_name="P1 Meter",
+        product_type="HWE-P1",
+        serial="P1SIMTEST",
+    )
+
+    assert publisher.start() is False
+    publisher.stop()

@@ -22,6 +22,7 @@ from .constants import (
     DEFAULT_TIMEZONE,
     DEFAULT_TLS_CN,
 )
+from .discovery import ZeroconfPublisher
 from .simulation import P1Simulation
 from .tls import ensure_self_signed_cert
 
@@ -98,6 +99,12 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_TLS_CN,
         help="Common Name used when auto-generating the TLS certificate",
     )
+    parser.add_argument(
+        "--advertise-zeroconf",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Advertise mDNS/zeroconf services for Home Assistant autodiscovery",
+    )
     return parser.parse_args()
 
 
@@ -123,6 +130,21 @@ def main() -> None:
 
     app = create_app(simulation)
 
+    zeroconf_publisher: ZeroconfPublisher | None = None
+    if args.advertise_zeroconf:
+        device_info = simulation.get_device_v2_payload()
+        zeroconf_publisher = ZeroconfPublisher(
+            host=args.host,
+            port=args.port,
+            product_name=str(device_info["product_name"]),
+            product_type=str(device_info["product_type"]),
+            serial=str(device_info["serial"]),
+        )
+        if zeroconf_publisher.start():
+            print("Autodiscovery: zeroconf advertisement enabled")
+        else:
+            print("Autodiscovery: zeroconf advertisement unavailable")
+
     ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ssl_context.load_cert_chain(certfile=str(cert_file), keyfile=str(key_file))
 
@@ -144,4 +166,6 @@ def main() -> None:
             print=None,
         )
     finally:
+        if zeroconf_publisher is not None:
+            zeroconf_publisher.stop()
         simulation.stop()
