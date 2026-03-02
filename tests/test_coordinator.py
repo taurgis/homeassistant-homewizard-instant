@@ -16,6 +16,7 @@ from homewizard_energy.v2 import HomeWizardEnergyV2
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.issue_registry import IssueSeverity
 from homeassistant.helpers.update_coordinator import UpdateFailed
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.homewizard_instant.coordinator import (
     HWEnergyDeviceUpdateCoordinator,
@@ -75,7 +76,11 @@ async def test_coordinator_update_success_clears_disabled_issue(
 
     assert data == mock_combined_data
     assert coordinator.api_disabled is False
-    delete_issue.assert_called_once_with(hass, DOMAIN, "local_api_disabled")
+    delete_issue.assert_called_once_with(
+        hass,
+        DOMAIN,
+        f"local_api_disabled_{mock_config_entry.entry_id}",
+    )
 
 
 async def test_coordinator_request_error(hass, mock_config_entry):
@@ -128,10 +133,65 @@ async def test_coordinator_disabled_error_triggers_reload(
     assert err.value.translation_key == "api_disabled"
     assert coordinator.api_disabled is True
     create_issue.assert_called_once()
-    assert create_issue.call_args.args[:3] == (hass, DOMAIN, "local_api_disabled")
+    assert create_issue.call_args.args[:3] == (
+        hass,
+        DOMAIN,
+        f"local_api_disabled_{mock_config_entry.entry_id}",
+    )
     assert create_issue.call_args.kwargs["severity"] == IssueSeverity.ERROR
     hass.config_entries.async_schedule_reload.assert_called_once_with(
         mock_config_entry.entry_id
+    )
+
+
+async def test_api_disabled_issue_is_scoped_per_entry(
+    hass, mock_config_entry, mock_combined_data
+):
+    """Test API-disabled issue IDs are isolated per config entry."""
+    mock_config_entry.add_to_hass(hass)
+
+    second_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={**mock_config_entry.data},
+        unique_id=f"{DOMAIN}_P1_SERIAL456",
+        title="P1 Meter 2",
+    )
+    second_entry.add_to_hass(hass)
+
+    coordinator_1 = HWEnergyDeviceUpdateCoordinator(
+        hass,
+        mock_config_entry,
+        AsyncMock(),
+        clientsession=AsyncMock(),
+        ws_token=None,
+    )
+    coordinator_2 = HWEnergyDeviceUpdateCoordinator(
+        hass,
+        second_entry,
+        AsyncMock(),
+        clientsession=AsyncMock(),
+        ws_token=None,
+    )
+    coordinator_1.data = mock_combined_data
+    coordinator_2.api_disabled = True
+
+    with patch(
+        "custom_components.homewizard_instant.coordinator.ir.async_create_issue"
+    ) as create_issue, patch(
+        "custom_components.homewizard_instant.coordinator.ir.async_delete_issue"
+    ) as delete_issue:
+        coordinator_1._set_api_disabled_issue()
+        coordinator_2._clear_api_disabled_issue()
+
+    assert create_issue.call_args.args[:3] == (
+        hass,
+        DOMAIN,
+        f"local_api_disabled_{mock_config_entry.entry_id}",
+    )
+    delete_issue.assert_called_once_with(
+        hass,
+        DOMAIN,
+        f"local_api_disabled_{second_entry.entry_id}",
     )
 
 

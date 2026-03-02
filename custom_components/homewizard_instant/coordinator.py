@@ -64,8 +64,11 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
             update_interval=UPDATE_INTERVAL,
         )
         self.api = api
+        self._api_disabled_issue_id = (
+            f"local_api_disabled_{self.config_entry.entry_id}"
+        )
         issue_exists = (
-            ir.async_get(hass).async_get_issue(DOMAIN, "local_api_disabled")
+            ir.async_get(hass).async_get_issue(DOMAIN, self._api_disabled_issue_id)
             is not None
         )
         self.api_disabled = self.api_disabled or issue_exists
@@ -175,7 +178,7 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
             ir.async_create_issue(
                 self.hass,
                 DOMAIN,
-                "local_api_disabled",
+                self._api_disabled_issue_id,
                 is_fixable=True,
                 severity=ir.IssueSeverity.ERROR,
                 translation_key="local_api_disabled",
@@ -194,7 +197,7 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
             return
 
         self.api_disabled = False
-        ir.async_delete_issue(self.hass, DOMAIN, "local_api_disabled")
+        ir.async_delete_issue(self.hass, DOMAIN, self._api_disabled_issue_id)
 
     async def _async_websocket_loop(self) -> None:
         """Maintain websocket connection and trigger fresh coordinator updates."""

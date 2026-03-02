@@ -15,7 +15,6 @@ from .coordinator import HomeWizardConfigEntry
 TO_REDACT = {
     CONF_IP_ADDRESS,
     "gas_unique_id",
-    "id",
     "serial",
     "token",
     "unique_id",

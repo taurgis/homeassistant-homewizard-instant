@@ -29,7 +29,7 @@ If you add this repository to HACS as a custom repository (category: **Integrati
 
 This integration is configured via the UI. The only required parameter is:
 
-- **IP address**: the local IP address of your HomeWizard P1 meter.
+- **Host**: the local IP address or hostname of your HomeWizard P1 meter (optionally with port).
 
 Depending on device firmware/API mode, setup can require pressing the physical button on the HomeWizard device so Home Assistant can obtain a local API token.
 
@@ -133,8 +133,8 @@ the integration can use the simulator's self-signed TLS certificate in developme
 ## Troubleshooting
 
 - **API disabled**: Enable the local API in the HomeWizard app and reauthenticate.
-- **Device unreachable**: Confirm the IP address and ensure the device is online.
-- **Discovery not found**: Add the integration manually and provide the IP address.
+- **Device unreachable**: Confirm the host (IP/hostname and optional port) and ensure the device is online.
+- **Discovery not found**: Add the integration manually and provide the device host.
 
 ## Known limitations
 
