@@ -331,6 +331,10 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
             except RecoverableError as ex:
                 LOGGER.debug("Reauth connection check failed: %s", ex)
                 errors = {"base": ex.error_code}
+            except UnauthorizedError:
+                # Some reauth flows may hit v2-only auth on entries that were
+                # previously configured without a token. Continue with token refresh.
+                return await self.async_step_reauth_confirm_update_token()
             else:
                 await self.hass.config_entries.async_reload(reauth_entry.entry_id)
                 return self.async_abort(reason="reauth_enable_api_successful")

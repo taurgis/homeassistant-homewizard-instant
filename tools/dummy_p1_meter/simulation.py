@@ -46,6 +46,54 @@ def rssi_to_strength(rssi_db: int) -> int:
     return int(2 * (rssi_db + 100))
 
 
+class TokenStore:
+    """In-memory token registry keyed by local user name."""
+
+    def __init__(self) -> None:
+        self._token_by_name: dict[str, str] = {}
+        self._name_by_token: dict[str, str] = {}
+
+    def issue(self, name: str) -> str:
+        """Issue or return a stable token for a local user name."""
+        token = self._token_by_name.get(name)
+        if token is not None:
+            return token
+
+        token = secrets.token_hex(32)
+        self._token_by_name[name] = token
+        self._name_by_token[token] = name
+        return token
+
+    def is_valid(self, token: str | None) -> bool:
+        """Return whether token is currently authorized."""
+        if token is None:
+            return False
+
+        return token in self._name_by_token
+
+    def revoke(self, token: str | None = None, name: str | None = None) -> None:
+        """Revoke one token by token or name, or all tokens when both are None."""
+        if token is not None:
+            entry_name = self._name_by_token.pop(token, None)
+            if entry_name is not None:
+                self._token_by_name.pop(entry_name, None)
+            return
+
+        if name is not None:
+            entry_token = self._token_by_name.pop(name, None)
+            if entry_token is not None:
+                self._name_by_token.pop(entry_token, None)
+            return
+
+        self._token_by_name.clear()
+        self._name_by_token.clear()
+
+    @property
+    def count(self) -> int:
+        """Return number of active tokens."""
+        return len(self._name_by_token)
+
+
 class P1Simulation:
     """Stateful 1 Hz simulation model for v1/v2 endpoints."""
 
@@ -183,8 +231,7 @@ class P1Simulation:
         self._last_seasonal_load_factor = 1.0
         self._last_combined_load_factor = 1.0
 
-        self._token_by_name: dict[str, str] = {}
-        self._name_by_token: dict[str, str] = {}
+        self._tokens = TokenStore()
 
         # Prime with an initial sample.
         self._tick_locked(now=self._last_sample_dt, dt_s=1.0)
@@ -215,6 +262,10 @@ class P1Simulation:
         """Start 1 Hz ticker thread."""
         if self._ticker_thread is not None:
             return
+
+        # Support clean restart on the same simulation instance.
+        self._stop_event.clear()
+        self._last_tick_monotonic = time.monotonic()
 
         self._ticker_thread = threading.Thread(
             target=self._run_ticker,
@@ -561,40 +612,17 @@ class P1Simulation:
     def issue_token(self, name: str) -> str:
         """Issue or return a stable token for a local user name."""
         with self._lock:
-            token = self._token_by_name.get(name)
-            if token is not None:
-                return token
-
-            token = secrets.token_hex(32)
-            self._token_by_name[name] = token
-            self._name_by_token[token] = name
-            return token
+            return self._tokens.issue(name)
 
     def is_valid_token(self, token: str | None) -> bool:
         """Return whether token is currently authorized."""
-        if token is None:
-            return False
-
         with self._lock:
-            return token in self._name_by_token
+            return self._tokens.is_valid(token)
 
     def revoke_token(self, token: str | None = None, name: str | None = None) -> None:
         """Revoke one token by token or name, or all tokens when both are None."""
         with self._lock:
-            if token is not None:
-                entry_name = self._name_by_token.pop(token, None)
-                if entry_name is not None:
-                    self._token_by_name.pop(entry_name, None)
-                return
-
-            if name is not None:
-                entry_token = self._token_by_name.pop(name, None)
-                if entry_token is not None:
-                    self._name_by_token.pop(entry_token, None)
-                return
-
-            self._token_by_name.clear()
-            self._name_by_token.clear()
+            self._tokens.revoke(token=token, name=name)
 
     def update_system_settings(self, payload: dict[str, Any]) -> None:
         """Apply partial system config updates."""
@@ -720,7 +748,7 @@ class P1Simulation:
             return {
                 "api_enabled": self._api_enabled,
                 "v2_auto_authorize": self._v2_auto_authorize,
-                "token_count": len(self._name_by_token),
+                "token_count": self._tokens.count,
                 "cloud_enabled": self._cloud_enabled,
                 "tz": str(self._tz),
                 "serial": self._serial,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 from datetime import datetime
+import time
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -175,3 +176,28 @@ def test_month_factor_interpolation_is_smooth_across_boundaries() -> None:
     )
 
     assert abs(jan_end - feb_start) < 0.02
+
+
+def test_simulation_can_restart_same_instance() -> None:
+    """Ensure start->stop->start resumes ticking on the same simulation object."""
+    simulation = P1Simulation(
+        seed=123,
+        timezone_name="Europe/Amsterdam",
+        latitude=52.3676,
+        pv_peak_w=0,
+        serial="P1SIMTEST",
+        api_enabled=True,
+        v2_auto_authorize=True,
+    )
+
+    simulation.start()
+    time.sleep(1.1)
+    first_sample = simulation.get_debug_state()["last_sample"]
+    simulation.stop()
+
+    simulation.start()
+    time.sleep(1.1)
+    second_sample = simulation.get_debug_state()["last_sample"]
+    simulation.stop()
+
+    assert first_sample != second_sample

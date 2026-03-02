@@ -64,6 +64,11 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
             update_interval=UPDATE_INTERVAL,
         )
         self.api = api
+        issue_exists = (
+            ir.async_get(hass).async_get_issue(DOMAIN, "local_api_disabled")
+            is not None
+        )
+        self.api_disabled = self.api_disabled or issue_exists
         self._clientsession = clientsession
         self._ws_token = ws_token
         self._ws_task: asyncio.Task[None] | None = None
@@ -185,6 +190,9 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
 
     def _clear_api_disabled_issue(self) -> None:
         """Clear disabled API issue after successful update."""
+        if not self.api_disabled:
+            return
+
         self.api_disabled = False
         ir.async_delete_issue(self.hass, DOMAIN, "local_api_disabled")
 

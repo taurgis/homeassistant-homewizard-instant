@@ -47,6 +47,34 @@ async def test_coordinator_update_success(hass, mock_config_entry, mock_combined
     assert data == mock_combined_data
     assert coordinator.data == mock_combined_data
     assert coordinator.api_disabled is False
+    delete_issue.assert_not_called()
+
+
+async def test_coordinator_update_success_clears_disabled_issue(
+    hass, mock_config_entry, mock_combined_data
+):
+    """Test coordinator clears disabled API issue after successful recovery."""
+    mock_config_entry.add_to_hass(hass)
+
+    api = AsyncMock()
+    api.combined = AsyncMock(return_value=mock_combined_data)
+
+    coordinator = HWEnergyDeviceUpdateCoordinator(
+        hass,
+        mock_config_entry,
+        api,
+        clientsession=AsyncMock(),
+        ws_token=None,
+    )
+    coordinator.api_disabled = True
+
+    with patch(
+        "custom_components.homewizard_instant.coordinator.ir.async_delete_issue"
+    ) as delete_issue:
+        data = await coordinator._async_update_data()
+
+    assert data == mock_combined_data
+    assert coordinator.api_disabled is False
     delete_issue.assert_called_once_with(hass, DOMAIN, "local_api_disabled")
 
 

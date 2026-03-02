@@ -560,6 +560,31 @@ async def test_reauth_flow_error(hass, mock_config_entry) -> None:
     assert result2["errors"] == {"base": "network_error"}
 
 
+async def test_reauth_flow_without_token_unauthorized_routes_to_token_refresh(
+    hass, mock_config_entry
+) -> None:
+    """Test reauth without token falls back to token refresh when auth is required."""
+    mock_config_entry.add_to_hass(hass)
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": "reauth", "entry_id": mock_config_entry.entry_id},
+        data=mock_config_entry.data,
+    )
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "reauth_enable_api"
+
+    with patch(
+        "custom_components.homewizard_instant.config_flow.async_try_connect",
+        side_effect=UnauthorizedError("unauthorized"),
+    ):
+        result2 = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+
+    assert result2["type"] == FlowResultType.FORM
+    assert result2["step_id"] == "reauth_confirm_update_token"
+
+
 async def test_reauth_flow_with_token_updates_token(hass) -> None:
     """Test reauth flow updates v2 token when token exists in entry data."""
     entry = MockConfigEntry(
