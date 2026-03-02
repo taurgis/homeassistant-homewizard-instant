@@ -62,10 +62,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomeWizardConfigEntry) -
         raise
 
     entry.runtime_data = coordinator
-    await coordinator.async_start_websocket()
+    try:
+        await coordinator.async_start_websocket()
 
-    # Finalize
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+        # Finalize
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    except Exception:
+        await coordinator.async_shutdown()
+        raise
 
     return True
 

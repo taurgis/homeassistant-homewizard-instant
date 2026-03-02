@@ -230,3 +230,37 @@ async def test_async_setup_entry_with_token_skips_migration_issue(hass) -> None:
         f"migrate_to_v2_api_{entry.entry_id}",
     )
     assert issue is None
+
+
+async def test_async_setup_entry_forward_failure_shuts_down(
+    hass, mock_config_entry
+) -> None:
+    """Test setup tears down runtime resources when platform forwarding fails."""
+    mock_config_entry.add_to_hass(hass)
+
+    mock_api = AsyncMock()
+    mock_api.close = AsyncMock()
+
+    with (
+        patch(
+            "custom_components.homewizard_instant.HomeWizardEnergyV1",
+            return_value=mock_api,
+        ),
+        patch(
+            "custom_components.homewizard_instant.async_get_clientsession",
+            return_value=AsyncMock(),
+        ),
+        patch(
+            "custom_components.homewizard_instant.HWEnergyDeviceUpdateCoordinator.async_config_entry_first_refresh",
+            new=AsyncMock(),
+        ),
+        patch.object(
+            hass.config_entries,
+            "async_forward_entry_setups",
+            side_effect=RuntimeError("boom"),
+        ),
+    ):
+        with pytest.raises(RuntimeError):
+            await async_setup_entry(hass, mock_config_entry)
+
+    mock_api.close.assert_awaited_once()

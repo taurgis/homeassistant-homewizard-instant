@@ -86,6 +86,35 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return None
 
+    @staticmethod
+    def _entry_unique_id(product_type: str, serial: str) -> str:
+        """Build the integration unique id for a discovered device."""
+        return f"{DOMAIN}_{product_type}_{serial}"
+
+    @staticmethod
+    def _device_validation_error(device_info: Device) -> str | None:
+        """Return abort reason when a discovered device is not valid."""
+        if device_info.product_type not in SUPPORTED_PRODUCT_TYPES:
+            return "device_not_supported"
+
+        if device_info.serial is None:
+            return "unknown_error"
+
+        return None
+
+    async def _async_validate_and_set_unique_id(
+        self, device_info: Device
+    ) -> ConfigFlowResult | None:
+        """Validate device compatibility and set the flow unique id."""
+        if (abort_reason := self._device_validation_error(device_info)) is not None:
+            return self.async_abort(reason=abort_reason)
+
+        assert device_info.serial is not None
+        await self.async_set_unique_id(
+            self._entry_unique_id(device_info.product_type, device_info.serial)
+        )
+        return None
+
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
@@ -101,16 +130,9 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
                 self.ip_address = user_input[CONF_IP_ADDRESS]
                 return await self.async_step_authorize()
             else:
-                # Only support P1 meter
-                if device_info.product_type not in SUPPORTED_PRODUCT_TYPES:
-                    return self.async_abort(reason="device_not_supported")
+                if (result := await self._async_validate_and_set_unique_id(device_info)) is not None:
+                    return result
 
-                if device_info.serial is None:
-                    return self.async_abort(reason="unknown_error")
-
-                await self.async_set_unique_id(
-                    f"{DOMAIN}_{device_info.product_type}_{device_info.serial}"
-                )
                 self._abort_if_unique_id_configured(updates=user_input)
                 return self.async_create_entry(
                     title=f"{device_info.product_name}",
@@ -162,20 +184,14 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
                 errors = {"base": "authorization_failed"}
                 return self.async_show_form(step_id="authorize", errors=errors)
 
-            if device_info.product_type not in SUPPORTED_PRODUCT_TYPES:
-                return self.async_abort(reason="device_not_supported")
-
-            if device_info.serial is None:
-                return self.async_abort(reason="unknown_error")
+            if (result := await self._async_validate_and_set_unique_id(device_info)) is not None:
+                return result
 
             data = {
                 CONF_IP_ADDRESS: self.ip_address,
                 CONF_TOKEN: token,
             }
 
-            await self.async_set_unique_id(
-                f"{DOMAIN}_{device_info.product_type}_{device_info.serial}"
-            )
             self._abort_if_unique_id_configured(updates=data)
             return self.async_create_entry(
                 title=f"{device_info.product_name}",
@@ -232,16 +248,8 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
         except UnauthorizedError:
             return self.async_abort(reason="unknown_error")
 
-        # Only support P1 meter
-        if device.product_type not in SUPPORTED_PRODUCT_TYPES:
-            return self.async_abort(reason="device_not_supported")
-
-        if device.serial is None:
-            return self.async_abort(reason="unknown_error")
-
-        await self.async_set_unique_id(
-            f"{DOMAIN}_{device.product_type}_{device.serial}"
-        )
+        if (result := await self._async_validate_and_set_unique_id(device)) is not None:
+            return result
 
         self._abort_if_unique_id_configured(
             updates={CONF_IP_ADDRESS: discovery_info.ip}
@@ -381,12 +389,9 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
             except UnauthorizedError:
                 errors = {"base": "authorization_failed"}
             else:
-                if device_info.serial is None:
-                    return self.async_abort(reason="unknown_error")
+                if (result := await self._async_validate_and_set_unique_id(device_info)) is not None:
+                    return result
 
-                await self.async_set_unique_id(
-                    f"{DOMAIN}_{device_info.product_type}_{device_info.serial}"
-                )
                 self._abort_if_unique_id_mismatch(reason="wrong_device")
                 return self.async_update_reload_and_abort(
                     self._get_reconfigure_entry(),

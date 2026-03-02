@@ -61,7 +61,10 @@
     "migrate_to_v2_api": {
       "fix_flow": {
         "error": {
-          "authorization_failed": "Authorization failed. Press the button on the HomeWizard and try again."
+          "authorization_failed": "Authorization failed. Press the button on the HomeWizard and try again.",
+          "api_not_enabled": "The local API is disabled. Go to the HomeWizard app and enable the API in the device settings.",
+          "network_error": "Device unreachable, make sure that you have entered the correct IP address and that the device is available in your network",
+          "unknown_error": "Unexpected error"
         },
         "step": {
           "authorize": {

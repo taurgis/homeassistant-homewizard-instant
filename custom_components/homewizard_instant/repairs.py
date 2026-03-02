@@ -7,9 +7,9 @@ from homeassistant.components.repairs import RepairsFlow
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_IP_ADDRESS, CONF_TOKEN
 from homeassistant.core import HomeAssistant
-from homeassistant.data_entry_flow import FlowResult
+from homeassistant.data_entry_flow import AbortFlow, FlowResult
 
-from .config_flow import async_request_token
+from .config_flow import RecoverableError, async_request_token
 
 
 class MigrateToV2ApiRepairFlow(RepairsFlow):
@@ -44,7 +44,16 @@ class MigrateToV2ApiRepairFlow(RepairsFlow):
             return self.async_show_form(step_id="authorize")
 
         ip_address = self.entry.data[CONF_IP_ADDRESS]
-        token = await async_request_token(self.hass, ip_address)
+        try:
+            token = await async_request_token(self.hass, ip_address)
+        except RecoverableError as err:
+            return self.async_show_form(
+                step_id="authorize", errors={"base": err.error_code}
+            )
+        except AbortFlow:
+            return self.async_show_form(
+                step_id="authorize", errors={"base": "unknown_error"}
+            )
 
         if token is None:
             return self.async_show_form(

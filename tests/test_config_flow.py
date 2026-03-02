@@ -626,20 +626,26 @@ async def test_reauth_flow_with_token_request_network_error(hass) -> None:
 
 async def test_reconfigure_flow_updates_entry(hass, mock_config_entry, mock_device_info):
     """Test reconfigure flow updates entry."""
-    mock_config_entry.add_to_hass(hass)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=mock_config_entry.data,
+        unique_id=f"{DOMAIN}_{Model.P1_METER}_SERIAL123",
+        title=mock_config_entry.title,
+    )
+    entry.add_to_hass(hass)
 
     hass.config_entries.async_reload = AsyncMock()
 
     result = await hass.config_entries.flow.async_init(
         DOMAIN,
-        context={"source": "reconfigure", "entry_id": mock_config_entry.entry_id},
+        context={"source": "reconfigure", "entry_id": entry.entry_id},
         data=None,
     )
 
     assert result["type"] == FlowResultType.FORM
 
     device_info = SimpleNamespace(
-        product_type="P1",
+        product_type=Model.P1_METER,
         product_name="P1 Meter",
         serial="SERIAL123",
     )
@@ -667,7 +673,7 @@ async def test_reconfigure_flow_wrong_device(hass, mock_config_entry):
     )
 
     device_info = SimpleNamespace(
-        product_type="P1",
+        product_type=Model.P1_METER,
         product_name="P1 Meter",
         serial="OTHER",
     )
@@ -697,7 +703,7 @@ async def test_reconfigure_flow_missing_serial_aborts(
     )
 
     device_info = SimpleNamespace(
-        product_type="P1",
+        product_type=Model.P1_METER,
         product_name="P1 Meter",
         serial=None,
     )
@@ -712,6 +718,36 @@ async def test_reconfigure_flow_missing_serial_aborts(
 
     assert result2["type"] == FlowResultType.ABORT
     assert result2["reason"] == "unknown_error"
+
+
+async def test_reconfigure_flow_device_not_supported_aborts(
+    hass, mock_config_entry
+) -> None:
+    """Test reconfigure flow aborts when the new IP resolves to unsupported type."""
+    mock_config_entry.add_to_hass(hass)
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": "reconfigure", "entry_id": mock_config_entry.entry_id},
+        data=None,
+    )
+
+    device_info = SimpleNamespace(
+        product_type="other",
+        product_name="Other",
+        serial="SERIAL123",
+    )
+
+    with patch(
+        "custom_components.homewizard_instant.config_flow.async_try_connect",
+        return_value=device_info,
+    ):
+        result2 = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_IP_ADDRESS: "2.3.4.5"}
+        )
+
+    assert result2["type"] == FlowResultType.ABORT
+    assert result2["reason"] == "device_not_supported"
 
 
 async def test_dhcp_unknown_device(hass) -> None:

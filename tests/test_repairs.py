@@ -7,8 +7,9 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from homeassistant.const import CONF_TOKEN
-from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.data_entry_flow import AbortFlow, FlowResultType
 
+from custom_components.homewizard_instant.config_flow import RecoverableError
 from custom_components.homewizard_instant.repairs import (
     MigrateToV2ApiRepairFlow,
     async_create_fix_flow,
@@ -110,3 +111,71 @@ async def test_async_create_fix_flow_raises_on_invalid_context(hass) -> None:
             "migrate_to_v2_api_invalid",
             {"entry_id": 123},
         )
+
+
+async def test_repair_flow_init_shows_confirm_step(hass, mock_config_entry) -> None:
+    """Test init step routes to confirmation form."""
+    mock_config_entry.add_to_hass(hass)
+
+    flow = MigrateToV2ApiRepairFlow(mock_config_entry)
+    flow.hass = hass
+
+    result = await flow.async_step_init()
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "confirm"
+
+
+async def test_repair_flow_confirm_submit_shows_authorize_step(
+    hass, mock_config_entry
+) -> None:
+    """Test confirm submission advances to authorize form."""
+    mock_config_entry.add_to_hass(hass)
+
+    flow = MigrateToV2ApiRepairFlow(mock_config_entry)
+    flow.hass = hass
+
+    result = await flow.async_step_confirm(user_input={})
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "authorize"
+
+
+async def test_repair_flow_authorize_recoverable_error_shows_form_error(
+    hass, mock_config_entry
+) -> None:
+    """Test repair authorize step surfaces retryable token request errors."""
+    mock_config_entry.add_to_hass(hass)
+
+    flow = MigrateToV2ApiRepairFlow(mock_config_entry)
+    flow.hass = hass
+
+    with patch(
+        "custom_components.homewizard_instant.repairs.async_request_token",
+        new=AsyncMock(side_effect=RecoverableError("boom", "network_error")),
+    ):
+        result = await flow.async_step_authorize(user_input={})
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "authorize"
+    assert result["errors"] == {"base": "network_error"}
+
+
+async def test_repair_flow_authorize_abortflow_shows_unknown_error(
+    hass, mock_config_entry
+) -> None:
+    """Test repair authorize step handles unexpected abortflow failures."""
+    mock_config_entry.add_to_hass(hass)
+
+    flow = MigrateToV2ApiRepairFlow(mock_config_entry)
+    flow.hass = hass
+
+    with patch(
+        "custom_components.homewizard_instant.repairs.async_request_token",
+        new=AsyncMock(side_effect=AbortFlow("unknown_error")),
+    ):
+        result = await flow.async_step_authorize(user_input={})
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "authorize"
+    assert result["errors"] == {"base": "unknown_error"}
