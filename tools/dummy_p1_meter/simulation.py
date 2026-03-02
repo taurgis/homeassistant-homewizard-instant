@@ -49,6 +49,8 @@ def rssi_to_strength(rssi_db: int) -> int:
 class TokenStore:
     """In-memory token registry keyed by local user name."""
 
+    _MAX_ACTIVE_TOKENS = 256
+
     def __init__(self) -> None:
         self._token_by_name: dict[str, str] = {}
         self._name_by_token: dict[str, str] = {}
@@ -58,6 +60,12 @@ class TokenStore:
         token = self._token_by_name.get(name)
         if token is not None:
             return token
+
+        # Keep token memory bounded for long-running simulator sessions.
+        if len(self._token_by_name) >= self._MAX_ACTIVE_TOKENS:
+            oldest_name, oldest_token = next(iter(self._token_by_name.items()))
+            self._token_by_name.pop(oldest_name, None)
+            self._name_by_token.pop(oldest_token, None)
 
         token = secrets.token_hex(32)
         self._token_by_name[name] = token

@@ -76,6 +76,11 @@ async def broadcast_topic(app: web.Application, topic: str) -> None:
 
     for ws in stale:
         clients.pop(ws, None)
+        if not ws.closed:
+            try:
+                await ws.close()
+            except Exception:
+                pass
 
 
 async def ws_broadcast_loop(app: web.Application) -> None:

@@ -111,13 +111,14 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
         """Stop websocket listener and close API resources."""
         self._ws_stop_event.set()
         self._ws_connected = False
-        if self._ws_task is not None:
-            self._ws_task.cancel()
+        ws_task = self._ws_task
+        self._ws_task = None
+        if ws_task is not None:
+            ws_task.cancel()
             try:
-                await self._ws_task
+                await ws_task
             except asyncio.CancelledError:
                 pass
-            self._ws_task = None
 
         await self.api.close()
 
@@ -203,29 +204,33 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
         """Maintain websocket connection and trigger fresh coordinator updates."""
         retry_delay = WS_INITIAL_RETRY_DELAY
 
-        while not self._ws_stop_event.is_set():
-            try:
-                await self._async_websocket_session()
-                retry_delay = WS_INITIAL_RETRY_DELAY
-            except ConfigEntryAuthFailed:
-                self._ws_connected = False
-                self.config_entry.async_start_reauth(self.hass)
-                return
-            except asyncio.CancelledError:
-                raise
-            except (ClientError, ConnectionError, OSError, UpdateFailed) as err:
-                LOGGER.debug("HomeWizard websocket disconnected: %s", err)
-            except Exception:  # pylint: disable=broad-except
-                LOGGER.exception("Unexpected HomeWizard websocket error")
-                raise
-            finally:
-                self._ws_connected = False
+        try:
+            while not self._ws_stop_event.is_set():
+                try:
+                    await self._async_websocket_session()
+                    retry_delay = WS_INITIAL_RETRY_DELAY
+                except ConfigEntryAuthFailed:
+                    self._ws_connected = False
+                    self.config_entry.async_start_reauth(self.hass)
+                    return
+                except asyncio.CancelledError:
+                    raise
+                except (ClientError, ConnectionError, OSError, UpdateFailed) as err:
+                    LOGGER.debug("HomeWizard websocket disconnected: %s", err)
+                except Exception:  # pylint: disable=broad-except
+                    LOGGER.exception("Unexpected HomeWizard websocket error")
+                    raise
+                finally:
+                    self._ws_connected = False
 
-            if self._ws_stop_event.is_set():
-                break
+                if self._ws_stop_event.is_set():
+                    break
 
-            await asyncio.sleep(retry_delay + random.random())
-            retry_delay = min(retry_delay * 2, WS_MAX_RETRY_DELAY)
+                await asyncio.sleep(retry_delay + random.random())
+                retry_delay = min(retry_delay * 2, WS_MAX_RETRY_DELAY)
+        finally:
+            if self._ws_task is asyncio.current_task():
+                self._ws_task = None
 
     async def _async_websocket_session(self) -> None:
         """Run a single websocket session until it closes."""
@@ -311,7 +316,12 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
         self, websocket: ClientWebSocketResponse, timeout: int
     ) -> dict[str, object] | None:
         """Receive a websocket JSON frame and decode it."""
-        message: WSMessage = await websocket.receive(timeout=timeout)
+        try:
+            message: WSMessage = await websocket.receive(timeout=timeout)
+        except TimeoutError:
+            LOGGER.debug("HomeWizard websocket receive timeout")
+            return None
+
         if message.type in (WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.ERROR):
             return None
         if message.type != WSMsgType.TEXT:

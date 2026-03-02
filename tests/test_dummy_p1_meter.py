@@ -5,12 +5,15 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator
 from datetime import datetime
 import time
+from unittest.mock import AsyncMock, Mock
 from zoneinfo import ZoneInfo
 
 import pytest
+from aiohttp import web
 from aiohttp.test_utils import TestClient
 
 from tools.dummy_p1_meter import P1Simulation, create_app
+from tools.dummy_p1_meter.api import broadcast_topic
 
 pytestmark = pytest.mark.enable_socket
 
@@ -119,6 +122,46 @@ async def test_v2_websocket_auth_and_subscription(dummy_client: TestClient) -> N
     assert event["data"] == {}
 
     await ws.close()
+
+
+async def test_broadcast_topic_closes_stale_client_on_send_failure() -> None:
+    """Ensure failed websocket sends close and remove stale clients."""
+    ws = Mock()
+    ws.closed = False
+    ws.send_json = AsyncMock(side_effect=RuntimeError("boom"))
+    ws.close = AsyncMock()
+
+    app = web.Application()
+    app["ws_clients"] = {ws: {"measurement"}}
+
+    await broadcast_topic(app, "measurement")
+
+    ws.close.assert_awaited_once()
+    assert ws not in app["ws_clients"]
+
+
+def test_token_store_is_bounded_for_long_running_sessions() -> None:
+    """Ensure repeated user creation does not grow token memory unbounded."""
+    simulation = P1Simulation(
+        seed=123,
+        timezone_name="Europe/Amsterdam",
+        latitude=52.3676,
+        pv_peak_w=4200,
+        serial="P1SIMTEST",
+        api_enabled=True,
+        v2_auto_authorize=True,
+    )
+
+    oldest_token = simulation.issue_token("local/user-0")
+    newest_token = oldest_token
+    for idx in range(1, 320):
+        newest_token = simulation.issue_token(f"local/user-{idx}")
+
+    state = simulation.get_debug_state()
+
+    assert state["token_count"] == 256
+    assert simulation.is_valid_token(oldest_token) is False
+    assert simulation.is_valid_token(newest_token) is True
 
 
 def test_load_profile_has_hourly_and_day_of_year_shape() -> None:

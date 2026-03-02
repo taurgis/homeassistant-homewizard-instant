@@ -609,6 +609,31 @@ async def test_websocket_loop_retries_after_updatefailed(hass, mock_config_entry
     sleep.assert_awaited_once()
 
 
+async def test_websocket_loop_clears_task_reference_on_exit(hass, mock_config_entry):
+    """Test websocket loop clears internal task reference when it exits."""
+    mock_config_entry.add_to_hass(hass)
+
+    coordinator = HWEnergyDeviceUpdateCoordinator(
+        hass,
+        mock_config_entry,
+        AsyncMock(),
+        clientsession=AsyncMock(),
+        ws_token="token123",
+    )
+
+    async def _session_once() -> None:
+        coordinator._ws_stop_event.set()
+
+    coordinator._async_websocket_session = AsyncMock(side_effect=_session_once)
+
+    ws_task = asyncio.create_task(coordinator._async_websocket_loop())
+    coordinator._ws_task = ws_task
+
+    await ws_task
+
+    assert coordinator._ws_task is None
+
+
 async def test_websocket_loop_logs_unexpected_exception(hass, mock_config_entry):
     """Test websocket loop logs and re-raises unexpected exceptions."""
     mock_config_entry.add_to_hass(hass)
@@ -860,6 +885,23 @@ async def test_receive_ws_json_handles_close_and_non_text(hass, mock_config_entr
 
     websocket.receive = AsyncMock(return_value=SimpleNamespace(type=WSMsgType.BINARY))
     assert await coordinator._async_receive_ws_json(websocket, timeout=1) == {}
+
+
+async def test_receive_ws_json_handles_timeout(hass, mock_config_entry):
+    """Test websocket JSON reader treats receive timeout as closed connection."""
+    mock_config_entry.add_to_hass(hass)
+
+    coordinator = HWEnergyDeviceUpdateCoordinator(
+        hass,
+        mock_config_entry,
+        AsyncMock(),
+        clientsession=AsyncMock(),
+        ws_token="token123",
+    )
+    websocket = AsyncMock()
+
+    websocket.receive = AsyncMock(side_effect=TimeoutError)
+    assert await coordinator._async_receive_ws_json(websocket, timeout=1) is None
 
 
 async def test_receive_ws_json_handles_invalid_or_non_object_json(
