@@ -28,3 +28,4 @@ build/
 dist/
 *.egg-info/
 .devcontainer/ha_config/*
+node_modules/

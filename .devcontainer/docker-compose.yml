@@ -18,6 +18,7 @@ services:
       - dummy-p1
     networks:
       - hwisolated
+      - hwegress
 
   dummy-p1:
     build:
@@ -44,10 +45,19 @@ services:
     volumes:
       - ..:/workspace:ro,cached
     networks:
-      - hwisolated
+      hwisolated:
+        # Keep manual setup stable in Home Assistant across container restarts.
+        ipv4_address: 172.31.250.10
 
 networks:
   hwisolated:
     name: homewizard_instant_isolated
     driver: bridge
     internal: true
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.31.250.0/24
+  hwegress:
+    name: homewizard_instant_egress
+    driver: bridge

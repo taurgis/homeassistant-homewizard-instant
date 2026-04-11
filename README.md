@@ -49,6 +49,20 @@ All entities read from one coordinator data source.
 - While websocket updates stay healthy, regular poll fetches are skipped to reduce duplicate requests.
 - If websocket activity becomes stale or disconnects, polling continues as fallback.
 
+## Releases
+
+This repository uses Changesets to prepare releases.
+
+```bash
+# Install release tooling once
+npm install
+
+# Add a changeset when a change should be included in the next release
+npm run changeset
+```
+
+When changesets land on `main`, GitHub Actions opens or updates a `Release` PR with the version bump, changelog updates, and synced integration manifest version. Merging that PR pushes the matching `v*` tag, and the existing release workflow publishes the GitHub release.
+
 ## Development: Dummy P1 Meter Simulator
 
 For local development in this repository's devcontainer, Home Assistant and a
