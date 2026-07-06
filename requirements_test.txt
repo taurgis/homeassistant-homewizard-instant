@@ -6,7 +6,7 @@ freezegun>=1.4.0
 ruff>=0.6.9
 mypy>=1.11.2
 pytest-cov
-python-homewizard-energy==10.1.0
+python-homewizard-energy>=10.1.0
 zeroconf
 aiodhcpwatcher
 aiodiscover

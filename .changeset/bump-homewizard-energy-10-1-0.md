@@ -2,4 +2,4 @@
 "ha-homewizard-instant-release-tools": patch
 ---
 
-Bump python-homewizard-energy to 10.1.0 to resolve the dependency conflict with Home Assistant core's HomeWizard integration (#7).
+Relax the python-homewizard-energy requirement to >=10.1.0 so the integration no longer conflicts with Home Assistant core's HomeWizard integration, regardless of the exact version core pins (#7).
