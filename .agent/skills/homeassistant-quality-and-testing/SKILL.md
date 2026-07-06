@@ -152,7 +152,7 @@ rules:
 Statuses: `done`, `todo`, `exempt` (with comment explaining why).
 
 ## Manifest & Metadata
-- Pin requirements (e.g., `python-homewizard-energy==10.0.1`) to avoid breaking upgrades.
+- Pin requirements (e.g., `python-homewizard-energy==10.1.0`) to avoid breaking upgrades.
 - Set `version`, `config_flow: true`, `iot_class`, and `codeowners`; keep documentation and issue tracker URLs current.
 - For HACS, keep releases/tagging consistent and add `hacs.json` if distribution via HACS.
 
