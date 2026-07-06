@@ -152,7 +152,7 @@ rules:
 Statuses: `done`, `todo`, `exempt` (with comment explaining why).
 
 ## Manifest & Metadata
-- Use a lower-bound range for requirements shared with core integrations (e.g., `python-homewizard-energy>=10.1.0`) so they never conflict with the version core pins; bump the lower bound when relying on newer library features.
+- Use a lower-bound range for requirements shared with core integrations (e.g., `python-homewizard-energy>=10.0.1`) so they never conflict with the version core pins; bump the lower bound when relying on newer library features.
 - Set `version`, `config_flow: true`, `iot_class`, and `codeowners`; keep documentation and issue tracker URLs current.
 - For HACS, keep releases/tagging consistent and add `hacs.json` if distribution via HACS.
 
