@@ -23,6 +23,7 @@ pytestmark = pytest.mark.enable_socket
 @pytest.fixture
 async def dummy_client(
     aiohttp_client,
+    socket_enabled: None,
 ) -> AsyncGenerator[TestClient, None]:
     """Create a test client for the dummy P1 API app."""
     simulation = P1Simulation(

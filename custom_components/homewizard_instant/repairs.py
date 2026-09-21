@@ -74,7 +74,9 @@ async def async_create_fix_flow(
     """Create a repair flow for a known issue."""
     entry_id = data.get("entry_id") if data is not None else None
     if not isinstance(entry_id, str):
-        raise ValueError("unknown repair context")
+        # Validates repair context supplied by the issue registry, covering both a
+        # missing and a wrong-typed entry_id, so ValueError is correct here.
+        raise ValueError("unknown repair context")  # noqa: TRY004
 
     if issue_id.startswith("migrate_to_v2_api_") and (
         entry := hass.config_entries.async_get_entry(entry_id)

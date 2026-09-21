@@ -1128,3 +1128,52 @@ async def test_diagnostics_summary_reports_ages_and_trims_metrics(
     assert len(coordinator._poll_update_timestamps) == 1
     assert len(coordinator._ws_update_timestamps) == 1
     assert len(coordinator._ws_message_timestamps) == 1
+
+
+async def test_websocket_events_alone_do_not_suppress_poll(
+    hass, mock_config_entry, mock_combined_data
+):
+    """Test incoming frames without successful refreshes do not freeze the data."""
+    mock_config_entry.add_to_hass(hass)
+
+    api = AsyncMock()
+    api.combined = AsyncMock(return_value=mock_combined_data)
+
+    coordinator = HWEnergyDeviceUpdateCoordinator(
+        hass,
+        mock_config_entry,
+        api,
+        clientsession=AsyncMock(),
+        ws_token="token123",
+    )
+    coordinator.data = mock_combined_data
+    coordinator._ws_connected = True
+    # Frames keep arriving, but no websocket-triggered refresh has succeeded.
+    coordinator._last_ws_event = monotonic()
+    coordinator._last_ws_refresh = monotonic() - 999
+
+    assert coordinator._websocket_is_realtime_active() is False
+
+    await coordinator._async_update_data()
+
+    api.combined.assert_awaited_once()
+
+
+async def test_websocket_refresh_failure_marks_update_error(hass, mock_config_entry):
+    """Test a failed websocket-triggered refresh surfaces as a coordinator error."""
+    mock_config_entry.add_to_hass(hass)
+
+    coordinator = HWEnergyDeviceUpdateCoordinator(
+        hass,
+        mock_config_entry,
+        AsyncMock(),
+        clientsession=AsyncMock(),
+        ws_token="token123",
+    )
+    coordinator._async_fetch_combined_data_serialized = AsyncMock(
+        side_effect=UpdateFailed("boom")
+    )
+
+    await coordinator._async_refresh_from_websocket("measurement")
+
+    assert coordinator.last_update_success is False

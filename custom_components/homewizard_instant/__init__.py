@@ -1,5 +1,10 @@
 """The Homewizard integration."""
 
+from homeassistant.const import CONF_IP_ADDRESS, CONF_TOKEN
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.issue_registry import IssueSeverity, async_create_issue
 from homewizard_energy import (
     HomeWizardEnergy,
     HomeWizardEnergyV1,
@@ -7,14 +12,8 @@ from homewizard_energy import (
     has_v2_api,
 )
 
-from homeassistant.const import CONF_IP_ADDRESS, CONF_TOKEN
-from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.issue_registry import IssueSeverity, async_create_issue
-
-from .const import DOMAIN, PLATFORMS
 from .config_flow import RecoverableError, async_request_token
+from .const import DOMAIN, PLATFORMS
 from .coordinator import HomeWizardConfigEntry, HWEnergyDeviceUpdateCoordinator
 from .v2_dev_ssl import InsecureHomeWizardEnergyV2, allow_insecure_v2_for_host
 

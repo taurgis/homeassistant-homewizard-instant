@@ -5,14 +5,13 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING, cast
 
-from homewizard_energy.models import ExternalDevice
-
 from homeassistant.components import sensor as sensor_platform
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.const import ATTR_VIA_DEVICE, UnitOfVolume
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.typing import StateType
+from homewizard_energy.models import ExternalDevice
 
 if TYPE_CHECKING:
     from homeassistant.helpers.entity_platform import (
@@ -40,7 +39,8 @@ from .sensor_descriptions import (
 
 SENSOR_DEVICE_CLASS_UNITS = cast(
     "dict[SensorDeviceClass, set[str]]",
-    getattr(sensor_platform, "DEVICE_CLASS_UNITS"),
+    # Not re-exported by the sensor platform, but stable and relied on upstream.
+    sensor_platform.DEVICE_CLASS_UNITS,  # type: ignore[attr-defined]
 )
 
 PARALLEL_UPDATES = 1
@@ -184,8 +184,8 @@ class HomeWizardExternalSensorEntity(HomeWizardEntity, SensorEntity):
 
 __all__ = [
     "EXTERNAL_SENSORS",
-    "SENSORS",
     "PARALLEL_UPDATES",
+    "SENSORS",
     "HomeWizardExternalSensorEntity",
     "HomeWizardExternalSensorEntityDescription",
     "HomeWizardSensorEntity",
