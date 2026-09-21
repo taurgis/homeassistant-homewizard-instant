@@ -154,15 +154,17 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
             return await self._async_fetch_combined_data()
 
     def _websocket_is_realtime_active(self) -> bool:
-        """Return True when websocket updates are currently healthy."""
+        """Return True when websocket updates are currently delivering fresh data."""
         if not self._ws_connected:
             return False
 
-        last_activity = max(self._last_ws_event, self._last_ws_refresh)
-        if last_activity == 0:
+        # Only a completed refresh proves data is still flowing. Incoming frames
+        # alone do not, because the payload is fetched over the HTTP API which
+        # can fail while the websocket keeps streaming events.
+        if self._last_ws_refresh == 0:
             return False
 
-        return monotonic() - last_activity < WS_ACTIVITY_STALE_SECONDS
+        return monotonic() - self._last_ws_refresh < WS_ACTIVITY_STALE_SECONDS
 
     async def _async_fetch_combined_data(self) -> DeviceResponseEntry:
         """Fetch combined data and map library errors to HA errors."""
@@ -411,6 +413,9 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
                     LOGGER.debug(
                         "WebSocket-triggered refresh failed on %s: %s", event_type, err
                     )
+                    # Surface the failure instead of leaving the last known values
+                    # in place; polling is suppressed while the websocket is live.
+                    self.async_set_update_error(err)
                     self._ws_refresh_pending = False
                     return
 
