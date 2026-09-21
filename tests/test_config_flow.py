@@ -13,8 +13,8 @@ from homewizard_energy.errors import UnauthorizedError
 
 from homeassistant.const import CONF_IP_ADDRESS, CONF_TOKEN
 from homeassistant.data_entry_flow import FlowResultType
-from homeassistant.components.dhcp import DhcpServiceInfo
-from homeassistant.components.zeroconf import ZeroconfServiceInfo
+from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
+from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -778,7 +778,7 @@ async def test_dhcp_unknown_device(hass) -> None:
     discovery_info = DhcpServiceInfo(
         ip="1.2.3.4",
         hostname="hw",
-        macaddress="AA:BB:CC:DD:EE:FF",
+        macaddress="aabbccddeeff",
     )
 
     with patch(
@@ -805,7 +805,7 @@ async def test_dhcp_updates_existing_entry_ip(hass) -> None:
     discovery_info = DhcpServiceInfo(
         ip="2.3.4.5",
         hostname="hw",
-        macaddress="AA:BB:CC:DD:EE:FF",
+        macaddress="aabbccddeeff",
     )
 
     device_info = SimpleNamespace(
@@ -839,7 +839,7 @@ async def test_dhcp_uses_stored_token_for_v2_entry(hass) -> None:
     discovery_info = DhcpServiceInfo(
         ip="2.3.4.5",
         hostname="hw",
-        macaddress="AA:BB:CC:DD:EE:FF",
+        macaddress="aabbccddeeff",
     )
 
     device_info = SimpleNamespace(
@@ -871,7 +871,7 @@ async def test_dhcp_device_not_supported(hass) -> None:
     discovery_info = DhcpServiceInfo(
         ip="1.2.3.4",
         hostname="hw",
-        macaddress="AA:BB:CC:DD:EE:FF",
+        macaddress="aabbccddeeff",
     )
 
     device_info = SimpleNamespace(
@@ -897,7 +897,7 @@ async def test_dhcp_serial_missing_aborts_unknown(hass) -> None:
     discovery_info = DhcpServiceInfo(
         ip="1.2.3.4",
         hostname="hw",
-        macaddress="AA:BB:CC:DD:EE:FF",
+        macaddress="aabbccddeeff",
     )
 
     device_info = SimpleNamespace(
@@ -923,7 +923,7 @@ async def test_dhcp_unauthorized_aborts_unknown_error(hass) -> None:
     discovery_info = DhcpServiceInfo(
         ip="1.2.3.4",
         hostname="hw",
-        macaddress="AA:BB:CC:DD:EE:FF",
+        macaddress="aabbccddeeff",
     )
 
     with patch(

@@ -7,8 +7,6 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Final, cast
 
-from homewizard_energy.models import CombinedModels, ExternalDevice
-
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntityDescription,
@@ -29,6 +27,7 @@ from homeassistant.const import (
 from homeassistant.helpers.typing import StateType
 from homeassistant.util.dt import utcnow
 from homeassistant.util.variance import ignore_variance
+from homewizard_energy.models import CombinedModels, ExternalDevice
 
 
 @dataclass(frozen=True, kw_only=True)

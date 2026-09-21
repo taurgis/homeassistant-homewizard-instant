@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
-from collections import deque
-from ipaddress import ip_address
 import json
 import random
 import ssl
+from collections import deque
+from collections.abc import Awaitable, Callable
+from ipaddress import ip_address
 from time import monotonic
 from typing import Any
 
@@ -20,6 +20,11 @@ from aiohttp import (
     WSMessage,
     WSMsgType,
 )
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homewizard_energy import HomeWizardEnergy, HomeWizardEnergyV1
 from homewizard_energy.errors import (
     DisabledError,
@@ -30,12 +35,6 @@ from homewizard_energy.errors import (
 from homewizard_energy.models import CombinedModels as DeviceResponseEntry
 from homewizard_energy.v2 import HomeWizardEnergyV2
 from homewizard_energy.v2.cacert import CACERT
-
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryAuthFailed
-from homeassistant.helpers import issue_registry as ir
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import DOMAIN, LOGGER, UPDATE_INTERVAL
 from .v2_dev_ssl import allow_insecure_v2_for_host

@@ -10,8 +10,8 @@ import pytest
 from homewizard_energy.const import Model
 from homewizard_energy.errors import UnauthorizedError
 
-from homeassistant.components.dhcp import DhcpServiceInfo
-from homeassistant.components.zeroconf import ZeroconfServiceInfo
+from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
+from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 from homeassistant.const import CONF_IP_ADDRESS, CONF_TOKEN
 from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -173,7 +173,7 @@ async def test_dhcp_valid_unknown_device_aborts_unknown_error(hass) -> None:
     discovery_info = DhcpServiceInfo(
         ip="1.2.3.4",
         hostname="hw",
-        macaddress="AA:BB:CC:DD:EE:FF",
+        macaddress="aabbccddeeff",
     )
 
     with patch(
