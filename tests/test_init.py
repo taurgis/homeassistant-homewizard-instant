@@ -1,88 +1,55 @@
-"""Tests for integration setup/unload."""
-
-from __future__ import annotations
+"""Setup and cleanup tests."""
 
 from unittest.mock import AsyncMock, patch
-
 import pytest
-
-from homeassistant.exceptions import ConfigEntryNotReady
-
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from custom_components.homewizard_instant import async_setup_entry, async_unload_entry
-from custom_components.homewizard_instant.const import PLATFORMS
 
 
-async def test_async_setup_entry_success(hass, mock_config_entry) -> None:
-    """Test setup entry success."""
+async def test_legacy_entry_requires_pairing(hass, mock_config_entry):
+    with pytest.raises(ConfigEntryAuthFailed):
+        await async_setup_entry(hass, mock_config_entry)
+
+
+@pytest.mark.parametrize("failure", [None, ConfigEntryNotReady, ConfigEntryAuthFailed])
+async def test_setup(hass, mock_config_entry, failure):
     mock_config_entry.add_to_hass(hass)
-
-    mock_api = AsyncMock()
-    mock_api.close = AsyncMock()
-
+    hass.config_entries.async_update_entry(
+        mock_config_entry,
+        data={
+            "ip_address": "1.2.3.4",
+            "token": "secret",
+            "product_type": "HWE-P1",
+            "serial": "aabbccddeeff",
+        },
+    )
     with (
         patch(
-            "custom_components.homewizard_instant.HomeWizardEnergyV1",
-            return_value=mock_api,
-        ),
-        patch(
-            "custom_components.homewizard_instant.async_get_clientsession",
-            return_value=AsyncMock(),
-        ),
-        patch(
-            "custom_components.homewizard_instant.HWEnergyDeviceUpdateCoordinator.async_config_entry_first_refresh",
-            new=AsyncMock(),
-        ),
+            "custom_components.homewizard_instant.HWEnergyDeviceUpdateCoordinator"
+        ) as cls,
         patch.object(
-            hass.config_entries,
-            "async_forward_entry_setups",
-            return_value=True,
-        ) as forward_setups,
+            hass.config_entries, "async_forward_entry_setups", return_value=True
+        ),
     ):
-        assert await async_setup_entry(hass, mock_config_entry)
-
-    assert mock_config_entry.runtime_data is not None
-    forward_setups.assert_called_once_with(mock_config_entry, PLATFORMS)
-
-
-async def test_async_setup_entry_not_ready_triggers_reauth(hass, mock_config_entry):
-    """Test ConfigEntryNotReady with API disabled triggers reauth."""
-    mock_config_entry.add_to_hass(hass)
-
-    mock_api = AsyncMock()
-    mock_api.close = AsyncMock()
-
-    with (
-        patch(
-            "custom_components.homewizard_instant.HomeWizardEnergyV1",
-            return_value=mock_api,
-        ),
-        patch(
-            "custom_components.homewizard_instant.async_get_clientsession",
-            return_value=AsyncMock(),
-        ),
-        patch(
-            "custom_components.homewizard_instant.HWEnergyDeviceUpdateCoordinator.async_config_entry_first_refresh",
-            new=AsyncMock(side_effect=ConfigEntryNotReady),
-        ),
-        patch(
-            "custom_components.homewizard_instant.HWEnergyDeviceUpdateCoordinator.api_disabled",
-            True,
-        ),
-        patch.object(mock_config_entry, "async_start_reauth") as start_reauth,
-    ):
-        with pytest.raises(ConfigEntryNotReady):
-            await async_setup_entry(hass, mock_config_entry)
-
-    start_reauth.assert_called_once_with(hass)
+        coordinator = cls.return_value
+        coordinator.async_config_entry_first_refresh = AsyncMock(side_effect=failure)
+        coordinator.async_stop = AsyncMock()
+        if failure:
+            with pytest.raises(failure):
+                await async_setup_entry(hass, mock_config_entry)
+            coordinator.async_stop.assert_awaited_once()
+        else:
+            assert await async_setup_entry(hass, mock_config_entry)
+            coordinator.async_start.assert_called_once()
+            assert mock_config_entry.runtime_data == coordinator
 
 
-async def test_async_unload_entry(hass, mock_config_entry) -> None:
-    """Test unloading a config entry."""
-    mock_config_entry.add_to_hass(hass)
-
+@pytest.mark.parametrize("success", [False, True])
+async def test_unload(hass, mock_config_entry, success):
+    coordinator = AsyncMock()
+    mock_config_entry.runtime_data = coordinator
     with patch.object(
-        hass.config_entries, "async_unload_platforms", return_value=True
-    ) as unload_platforms:
-        assert await async_unload_entry(hass, mock_config_entry)
-
-    unload_platforms.assert_called_once_with(mock_config_entry, PLATFORMS)
+        hass.config_entries, "async_unload_platforms", return_value=success
+    ):
+        assert await async_unload_entry(hass, mock_config_entry) == success
+    assert coordinator.async_stop.await_count == int(success)

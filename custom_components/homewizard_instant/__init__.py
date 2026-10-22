@@ -1,45 +1,47 @@
-"""The Homewizard integration."""
+"""HomeWizard Instant using API v2 WebSockets."""
 
-from homewizard_energy import HomeWizardEnergyV1
-
-from homeassistant.const import CONF_IP_ADDRESS
+from homeassistant.const import CONF_IP_ADDRESS, CONF_TOKEN
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homewizard_energy.models import get_verification_hostname
 
-from .const import PLATFORMS
+from .const import CONF_PRODUCT_TYPE, CONF_SERIAL, PLATFORMS
 from .coordinator import HomeWizardConfigEntry, HWEnergyDeviceUpdateCoordinator
+from .websocket import HomeWizardWebSocket, create_ssl_context
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: HomeWizardConfigEntry) -> bool:
-    """Set up Homewizard from a config entry."""
-
-    api = HomeWizardEnergyV1(
+    """Set up push updates; legacy entries pair once through reauthentication."""
+    if not all(
+        entry.data.get(key) for key in (CONF_TOKEN, CONF_PRODUCT_TYPE, CONF_SERIAL)
+    ):
+        raise ConfigEntryAuthFailed("Pair this P1 meter with API v2")
+    api = HomeWizardWebSocket(
+        async_get_clientsession(hass),
         entry.data[CONF_IP_ADDRESS],
-        clientsession=async_get_clientsession(hass),
+        entry.data[CONF_TOKEN],
+        get_verification_hostname(
+            entry.data[CONF_PRODUCT_TYPE], entry.data[CONF_SERIAL]
+        ),
+        await hass.async_add_executor_job(create_ssl_context),
     )
-
     coordinator = HWEnergyDeviceUpdateCoordinator(hass, entry, api)
     try:
         await coordinator.async_config_entry_first_refresh()
-
-    except ConfigEntryNotReady:
-        await coordinator.api.close()
-
-        if coordinator.api_disabled:
-            entry.async_start_reauth(hass)
-
+        entry.runtime_data = coordinator
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+        coordinator.async_start()
+    except BaseException:
+        await coordinator.async_stop()
         raise
-
-    entry.runtime_data = coordinator
-
-    # Finalize
-    entry.async_on_unload(coordinator.api.close)
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
+    entry.async_on_unload(coordinator.async_stop)
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: HomeWizardConfigEntry) -> bool:
-    """Unload a config entry."""
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    """Stop the reader only when platforms have successfully unloaded."""
+    if await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
+        await entry.runtime_data.async_stop()
+        return True
+    return False
