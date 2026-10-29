@@ -75,3 +75,29 @@ async def test_remove_revokes_token(hass, mock_config_entry, token):
         )
     else:
         revoke.assert_not_called()
+
+
+async def test_only_unreported_devices_can_be_removed(
+    hass, mock_config_entry, mock_combined_data
+):
+    from types import SimpleNamespace
+
+    from custom_components.homewizard_instant import async_remove_config_entry_device
+    from custom_components.homewizard_instant.const import DOMAIN
+
+    def device(key):
+        return SimpleNamespace(identifiers={(DOMAIN, f"{DOMAIN}_{key}")})
+
+    assert await async_remove_config_entry_device(hass, mock_config_entry, device("x"))
+    mock_config_entry.runtime_data = SimpleNamespace(data=mock_combined_data)
+    serial = mock_combined_data.device.serial
+    external = next(iter(mock_combined_data.measurement.external_devices))
+    assert not await async_remove_config_entry_device(
+        hass, mock_config_entry, device(serial)
+    )
+    assert not await async_remove_config_entry_device(
+        hass, mock_config_entry, device(external)
+    )
+    assert await async_remove_config_entry_device(
+        hass, mock_config_entry, device("gas_meter_gone")
+    )

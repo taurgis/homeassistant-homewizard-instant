@@ -187,6 +187,14 @@ async def test_unusable_frames_keep_the_last_snapshot(caplog):
             {"power_w": None, "frequency_hz": None},
         ),
         ({"external": "nope", "energy_import_kwh": 5}, {"external_devices": {}}),
+        # Fields the library parses itself must not reject the whole snapshot.
+        ({"timestamp": "garbage", "energy_import_kwh": 5}, {"timestamp": None}),
+        (
+            {"monthly_power_peak_timestamp": "x", "energy_import_kwh": 5},
+            {"monthly_power_peak_timestamp": None},
+        ),
+        ({"tariff": "two", "energy_import_kwh": 5}, {"tariff": None}),
+        ({"any_power_fail_count": "x", "energy_import_kwh": 5}, {"any_power_fail_count": None}),
     ],
 )
 async def test_bad_fields_only_drop_themselves(caplog, data, expected):
@@ -234,6 +242,11 @@ async def test_bad_external_meters_are_dropped():
                     1,
                     {**gas, "value": None},
                     {**gas, "value": 10**15},
+                    {**gas, "timestamp": None},
+                    {**gas, "timestamp": "garbage"},
+                    {**gas, "unit": None},
+                    {**gas, "type": None},
+                    {**gas, "unique_id": 5},
                     {**gas, "unique_id": "5730303031", "value": 2.5},
                 ],
             },

@@ -81,6 +81,27 @@ def _without_meter_ids(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+def _describe_error(err: Exception | None, ip_address: str | None) -> Any:
+    """Keep the failure reason, which aiohttp prefixes with the host address."""
+    if err is None:
+        return None
+    described: dict[str, Any] = {
+        "type": type(err).__name__,
+        "message": str(err),
+        "translation_key": getattr(err, "translation_key", None),
+    }
+    for key, value in (getattr(err, "translation_placeholders", None) or {}).items():
+        described[f"placeholder_{key}"] = str(value)
+    if ip_address:
+        described = {
+            key: value.replace(ip_address, "**REDACTED**")
+            if isinstance(value, str)
+            else value
+            for key, value in described.items()
+        }
+    return described
+
+
 async def async_get_config_entry_diagnostics(
     hass: HomeAssistant, entry: HomeWizardConfigEntry
 ) -> dict[str, Any]:
@@ -97,10 +118,8 @@ async def async_get_config_entry_diagnostics(
             },
             "connection": {
                 "last_update_success": coordinator.last_update_success,
-                "last_exception": (
-                    repr(coordinator.last_exception)
-                    if coordinator.last_exception is not None
-                    else None
+                "last_exception": _describe_error(
+                    coordinator.last_exception, entry.data.get(CONF_IP_ADDRESS)
                 ),
             },
             "data": _without_meter_ids(_serialize_data(coordinator.data)),

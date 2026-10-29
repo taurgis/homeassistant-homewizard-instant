@@ -9,7 +9,7 @@ Home Assistant’s official HomeWizard integration is documented here:
 
 This integration subscribes to local measurement updates as the P1 meter produces them, without a scheduled polling interval.
 
-Because this integration uses a different domain (`homewizard_instant`), it can run **side-by-side** with the official integration.
+Because this integration uses a different domain (`homewizard_instant`), it can run **side-by-side** with the official integration. Both register the meter's MAC address, so Home Assistant shows one device holding the entities of both integrations.
 
 ## Installation
 
@@ -45,7 +45,7 @@ The integration stores a v2 token under a separate local device user and keeps d
 
 One TLS-verified `wss://<host>/api/ws` connection authenticates and subscribes to `device`, `measurement` and `system`. Setup waits for all three initial snapshots. All entities read from the coordinator data.
 
-Disconnects mark entities unavailable and trigger reconnect attempts with backoff from 1 to 60 seconds; the delay only starts over at 1 second after a connection has stayed up for a minute. If the socket stays up but the meter sends no measurement for 60 seconds (for example when the P1 cable is unplugged from the smart meter), sensors become unavailable until measurements resume. A field the meter reports as null or out of range makes only that sensor unavailable; the rest keep updating. Sensors for fields that first appear after setup are added automatically. Revoked tokens start reauthentication. Unloading cancels the reader and closes the socket.
+Disconnects mark entities unavailable and trigger reconnect attempts with backoff from 1 to 60 seconds; the delay only starts over at 1 second after a connection has stayed up for a minute. If the socket stays up but the meter sends no measurement for 60 seconds (for example when the P1 cable is unplugged from the smart meter), sensors become unavailable until measurements resume. A field the meter reports as null, malformed or out of range makes only that sensor unavailable; the rest keep updating. Sensors for fields that first appear after setup are added automatically. Revoked tokens start reauthentication. Unloading cancels the reader and closes the socket.
 
 ### Upgrading from API v1
 
@@ -60,7 +60,7 @@ Existing entries prompt for one-time v2 pairing after updating and restarting. C
 - Near real-time power and energy sensors (import/export totals and tariffs).
 - Voltage, current, frequency, and power factor sensors (when provided by the device).
 - Device diagnostics (firmware, DSMR version, Wi-Fi details, uptime).
-- External meters connected to the P1 meter (gas, water, heat), when reported by the API.
+- External meters connected to the P1 meter (gas, water, heat), when reported by the API. A meter the P1 meter no longer reports can be deleted from its device page.
 
 ## Examples
 

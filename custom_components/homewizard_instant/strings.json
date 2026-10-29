@@ -8,14 +8,17 @@
       "unknown_error": "Unexpected error",
       "wrong_device": "The device at this IP address is not the configured P1 meter.",
       "reauth_successful": "Pairing successful",
-      "unknown_device": "This device is not set up in HomeWizard Instant."
+      "unknown_device": "This device is not set up in HomeWizard Instant.",
+      "already_in_progress": "Setup of this P1 meter is already in progress."
     },
     "error": {
       "network_error": "Device unreachable, make sure that you have entered the correct IP address and that the device is available in your network",
       "authorization_failed": "Press the device button and submit within 30 seconds.",
       "invalid_auth": "The token was rejected. Pair the device again.",
       "unsupported_api_version": "This device requires firmware supporting API v2 and WebSockets.",
-      "unknown": "Unexpected error. Check the Home Assistant logs for details."
+      "unknown": "Unexpected error. Check the Home Assistant logs for details.",
+      "wrong_device": "The device at this IP address is not the configured P1 meter.",
+      "invalid_response": "The device sent an unexpected response. Try again."
     },
     "step": {
       "discovery_confirm": {
@@ -134,19 +137,19 @@
         "name": "Wi-Fi strength"
       },
       "gas_meter": {
-        "name": "Gas meter"
+        "name": "Total gas"
       },
       "heat_meter": {
-        "name": "Heat meter"
+        "name": "Total heat energy"
       },
       "warm_water_meter": {
-        "name": "Warm water meter"
+        "name": "Total warm water"
       },
       "water_meter": {
-        "name": "Water meter"
+        "name": "Total water"
       },
       "inlet_heat_meter": {
-        "name": "Inlet heat meter"
+        "name": "Total inlet heat energy"
       }
     }
   }

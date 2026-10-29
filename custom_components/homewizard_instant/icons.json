@@ -10,9 +10,6 @@
       "dsmr_version": {
         "default": "mdi:counter"
       },
-      "gas_unique_id": {
-        "default": "mdi:alphabetical-variant"
-      },
       "long_power_fail_count": {
         "default": "mdi:transmission-tower-off"
       },
@@ -22,22 +19,10 @@
       "unique_meter_id": {
         "default": "mdi:alphabetical-variant"
       },
-      "voltage_sag_l1_count": {
+      "voltage_sag_phase_count": {
         "default": "mdi:alert"
       },
-      "voltage_sag_l2_count": {
-        "default": "mdi:alert"
-      },
-      "voltage_sag_l3_count": {
-        "default": "mdi:alert"
-      },
-      "voltage_swell_l1_count": {
-        "default": "mdi:alert"
-      },
-      "voltage_swell_l2_count": {
-        "default": "mdi:alert"
-      },
-      "voltage_swell_l3_count": {
+      "voltage_swell_phase_count": {
         "default": "mdi:alert"
       },
       "wifi_ssid": {

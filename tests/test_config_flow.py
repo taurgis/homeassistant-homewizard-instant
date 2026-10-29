@@ -1,11 +1,13 @@
 """Tests for API v2 pairing, migration, discovery and identity checks."""
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from homewizard_energy.errors import (
     DisabledError,
+    InvalidUserNameError,
+    ResponseError,
     RequestError,
     UnauthorizedError,
     NotFoundError,
@@ -206,12 +208,15 @@ async def test_wrong_device(hass, source):
     with (
         patch(PREFIX + "async_request_token", return_value="secret"),
         patch(PREFIX + "async_try_connect", return_value=DEVICE),
+        patch(PREFIX + "async_revoke_token") as revoke,
     ):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"], {} if source == "reauth" else {"ip_address": "2.3.4.5"}
         )
     assert result["reason"] == "wrong_device"
     assert entry.data == DATA
+    # Reauth paired a new token with the wrong meter; it must not linger there.
+    assert revoke.await_count == (1 if source == "reauth" else 0)
 
 
 async def test_reconfigure(hass):
@@ -275,9 +280,11 @@ async def test_unsupported(hass):
             PREFIX + "async_try_connect",
             return_value=SimpleNamespace(product_type="HWE-SKT"),
         ),
+        patch(PREFIX + "async_revoke_token") as revoke,
     ):
         result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
     assert result["reason"] == "device_not_supported"
+    assert revoke.await_args.args[2] == "secret"
 
 
 @pytest.mark.parametrize("known", [False, True])
@@ -317,7 +324,9 @@ async def test_zeroconf(hass):
     assert result["step_id"] == "authorize"
 
 
-@pytest.mark.parametrize("failure", [None, RequestError(), ValueError("bad body")])
+@pytest.mark.parametrize(
+    "failure", [None, RequestError(), ValueError("bad body"), TimeoutError()]
+)
 async def test_revoke_token(hass, caplog, failure):
     from custom_components.homewizard_instant.config_flow import async_revoke_token
 
@@ -411,3 +420,62 @@ async def test_wrong_address_returns_to_user_form(hass):
         )
     assert request.await_args.args[1] == "1.2.3.5"
     assert result["step_id"] == "authorize"
+
+
+def _certificate_mismatch() -> RequestError:
+    from aiohttp import ClientConnectorCertificateError
+
+    error = RequestError("TLS")
+    error.__cause__ = ClientConnectorCertificateError(Mock(), ValueError("hostname"))
+    return error
+
+
+@pytest.mark.parametrize(
+    ("exception", "pinned", "code"),
+    [
+        (_certificate_mismatch(), True, "wrong_device"),
+        # Without a known identity there is no device to compare against.
+        (_certificate_mismatch(), False, "network_error"),
+        (RequestError(), True, "network_error"),
+        (ResponseError(), True, "invalid_response"),
+        (InvalidUserNameError(), True, "invalid_response"),
+    ],
+)
+async def test_identity_and_response_errors(hass, exception, pinned, code):
+    identity = {"product_type": "HWE-P1", "serial": DEVICE.serial} if pinned else {}
+    api = AsyncMock()
+    api.device.side_effect = exception
+    api.get_token.side_effect = exception
+    with (
+        patch(PREFIX + "HomeWizardEnergyV2", return_value=api),
+        patch(PREFIX + "instance_id.async_get", return_value="abcdef1234567890"),
+    ):
+        with pytest.raises(RecoverableError) as connect:
+            await async_try_connect(hass, "1.2.3.4", token="secret", **identity)
+        with pytest.raises(RecoverableError) as request:
+            await async_request_token(hass, "1.2.3.4", **identity)
+    assert connect.value.error_code == request.value.error_code == code
+
+
+async def test_manual_setup_with_pending_discovery(hass):
+    """A discovery card for the same meter must not abort a manual pairing."""
+    discovery = SimpleNamespace(
+        host="1.2.3.4",
+        properties={
+            "product_type": "HWE-P1",
+            "product_name": "P1 Meter",
+            "serial": DEVICE.serial,
+        },
+    )
+    pending = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "zeroconf"}, data=discovery
+    )
+    assert pending["step_id"] == "discovery_confirm"
+    result = await start_pairing(hass)
+    with (
+        patch(PREFIX + "async_request_token", return_value="secret"),
+        patch(PREFIX + "async_try_connect", return_value=DEVICE),
+    ):
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert not hass.config_entries.flow.async_progress_by_handler(DOMAIN)

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from typing import Any
 
 import voluptuous as vol
-from aiohttp import ClientSession
+from aiohttp import ClientConnectorCertificateError, ClientSession
 from homeassistant.config_entries import SOURCE_USER, ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_IP_ADDRESS, CONF_TOKEN
 from homeassistant.core import HomeAssistant
@@ -31,6 +32,8 @@ from homewizard_energy.models import Device, get_verification_hostname
 
 from .const import CONF_PRODUCT_NAME, CONF_PRODUCT_TYPE, CONF_SERIAL, DOMAIN, LOGGER
 from .websocket import trust_development_ca
+
+_REVOKE_TIMEOUT = 8
 
 
 def identity_from_unique_id(unique_id: str | None) -> tuple[str | None, str | None]:
@@ -131,14 +134,17 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
                     serial=serial,
                 )
                 if device.product_type != Model.P1_METER:
-                    return self.async_abort(reason="device_not_supported")
+                    return await self._async_abort_and_revoke("device_not_supported")
                 if not device.serial:
-                    return self.async_abort(reason="unknown_error")
+                    return await self._async_abort_and_revoke("unknown_error")
                 unique_id = f"{DOMAIN}_{device.product_type}_{device.serial}"
                 # Discovery must not silently pair with a different device at a reused IP.
                 if self.unique_id is not None and self.unique_id != unique_id:
-                    return self.async_abort(reason="wrong_device")
-                await self.async_set_unique_id(unique_id)
+                    return await self._async_abort_and_revoke("wrong_device")
+                # A pending discovery card for this meter must not abort a
+                # manual setup after the button press; creating the entry
+                # dismisses that card.
+                await self.async_set_unique_id(unique_id, raise_on_progress=False)
                 data = {
                     CONF_IP_ADDRESS: self.ip_address,
                     CONF_TOKEN: self._token,
@@ -146,7 +152,8 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
                     CONF_SERIAL: device.serial,
                 }
                 if self.source == "reauth":
-                    self._abort_if_unique_id_mismatch(reason="wrong_device")
+                    if self._get_reauth_entry().unique_id != unique_id:
+                        return await self._async_abort_and_revoke("wrong_device")
                     return self.async_update_reload_and_abort(
                         self._get_reauth_entry(), data_updates=data
                     )
@@ -172,6 +179,21 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
             errors=errors,
             description_placeholders={CONF_IP_ADDRESS: self.ip_address},
         )
+
+    async def _async_abort_and_revoke(self, reason: str) -> ConfigFlowResult:
+        """Abort without leaving the new token behind on the device."""
+        assert self.ip_address is not None and self._token is not None
+        product_type, serial = pinned_identity(
+            self.product_type, self.serial, self.unique_id
+        )
+        await async_revoke_token(
+            self.hass,
+            self.ip_address,
+            self._token,
+            product_type=product_type,
+            serial=serial,
+        )
+        return self.async_abort(reason=reason)
 
     async def async_step_zeroconf(
         self, discovery_info: ZeroconfServiceInfo
@@ -317,7 +339,11 @@ async def async_try_connect(
     except (NotFoundError, UnsupportedError) as err:
         raise RecoverableError("API v2 required", "unsupported_api_version") from err
     except RequestError as err:
-        raise RecoverableError("Cannot connect", "network_error") from err
+        raise _request_error(
+            err, pinned=verification_hostname(product_type, serial) is not None
+        ) from err
+    except HomeWizardEnergyException as err:
+        raise RecoverableError("Unexpected response", "invalid_response") from err
     finally:
         await api.close()
 
@@ -346,7 +372,11 @@ async def async_request_token(
     except (NotFoundError, UnsupportedError) as err:
         raise RecoverableError("API v2 required", "unsupported_api_version") from err
     except RequestError as err:
-        raise RecoverableError("Cannot connect", "network_error") from err
+        raise _request_error(
+            err, pinned=verification_hostname(product_type, serial) is not None
+        ) from err
+    except HomeWizardEnergyException as err:
+        raise RecoverableError("Unexpected response", "invalid_response") from err
     finally:
         await api.close()
 
@@ -369,8 +399,11 @@ async def async_revoke_token(
         timeout=5,
     )
     try:
-        await api.delete_token()
-    except (HomeWizardEnergyException, ValueError) as err:
+        # The library retries failed requests; cap the total wait so removing
+        # an entry for an offline meter does not hang.
+        async with asyncio.timeout(_REVOKE_TIMEOUT):
+            await api.delete_token()
+    except (HomeWizardEnergyException, TimeoutError, ValueError) as err:
         LOGGER.info(
             "Could not remove the Home Assistant user from the HomeWizard meter at "
             "%s (%s); remove it in the HomeWizard Energy app if needed",
@@ -379,6 +412,13 @@ async def async_revoke_token(
         )
     finally:
         await api.close()
+
+
+def _request_error(err: RequestError, *, pinned: bool) -> RecoverableError:
+    """Tell a different device at the address apart from an unreachable one."""
+    if pinned and isinstance(err.__cause__, ClientConnectorCertificateError):
+        return RecoverableError("Certificate identity mismatch", "wrong_device")
+    return RecoverableError("Cannot connect", "network_error")
 
 
 class RecoverableError(HomeAssistantError):

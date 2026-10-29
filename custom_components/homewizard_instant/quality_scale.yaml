@@ -64,8 +64,10 @@ rules:
     status: exempt
     comment: Token problems use reauthentication; there is nothing else to repair.
   stale-devices:
-    status: exempt
-    comment: Local device integration does not manage stale device cleanup.
+    status: done
+    comment: >-
+      External meters the P1 meter no longer reports can be deleted from the
+      device page; the P1 meter itself and reported meters cannot.
 
   # Platinum
   async-dependency: done

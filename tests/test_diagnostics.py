@@ -132,3 +132,21 @@ async def test_diagnostics_hide_external_meter_ids(
     assert "gas123" not in str(diagnostics)
     assert diagnostics["data"]["measurement"]["external_devices"][0]["value"] == 1.5
     assert diagnostics["connection"]["last_update_success"] is True
+
+
+def test_last_exception_keeps_the_reason_without_the_address() -> None:
+    from homeassistant.helpers.update_coordinator import UpdateFailed
+
+    from custom_components.homewizard_instant.diagnostics import _describe_error
+
+    err = UpdateFailed(
+        translation_domain="homewizard_instant",
+        translation_key="communication_error",
+        translation_placeholders={"error": "Cannot connect to host 1.2.3.4:443"},
+    )
+    described = _describe_error(err, "1.2.3.4")
+    assert described["type"] == "UpdateFailed"
+    assert described["translation_key"] == "communication_error"
+    assert described["placeholder_error"] == "Cannot connect to host **REDACTED**:443"
+    assert "1.2.3.4" not in str(described)
+    assert _describe_error(None, "1.2.3.4") is None

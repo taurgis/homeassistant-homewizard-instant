@@ -3,11 +3,12 @@
 from homeassistant.const import CONF_IP_ADDRESS, CONF_TOKEN
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homewizard_energy.models import get_verification_hostname
 
 from .config_flow import async_revoke_token
-from .const import CONF_PRODUCT_TYPE, CONF_SERIAL, PLATFORMS
+from .const import CONF_PRODUCT_TYPE, CONF_SERIAL, DOMAIN, PLATFORMS
 from .coordinator import HomeWizardConfigEntry, HWEnergyDeviceUpdateCoordinator
 from .websocket import HomeWizardWebSocket, create_ssl_context
 
@@ -55,3 +56,18 @@ async def async_remove_entry(hass: HomeAssistant, entry: HomeWizardConfigEntry) 
             product_type=entry.data.get(CONF_PRODUCT_TYPE),
             serial=entry.data.get(CONF_SERIAL),
         )
+
+
+async def async_remove_config_entry_device(
+    hass: HomeAssistant, entry: HomeWizardConfigEntry, device: dr.DeviceEntry
+) -> bool:
+    """Let users delete external meters the P1 meter no longer reports."""
+    coordinator = getattr(entry, "runtime_data", None)
+    if coordinator is None or coordinator.data is None:
+        return True
+    data = coordinator.data
+    reported = {
+        (DOMAIN, f"{DOMAIN}_{key}")
+        for key in [data.device.serial, *(data.measurement.external_devices or {})]
+    }
+    return not device.identifiers & reported

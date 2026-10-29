@@ -116,7 +116,7 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[CombinedModels]):
             "No HomeWizard measurement received for %d s; marking sensors unavailable",
             silent,
         )
-        self.async_set_update_error(
+        self._async_set_unavailable(
             UpdateFailed(
                 translation_domain=DOMAIN,
                 translation_key="stale_data",
@@ -125,6 +125,17 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[CombinedModels]):
                 },
             )
         )
+
+    @callback
+    def _async_set_unavailable(self, err: Exception) -> None:
+        """Like async_set_update_error, without a second ERROR log line.
+
+        Every caller has already logged the outage with its own context.
+        """
+        self.last_exception = err
+        if self.last_update_success:
+            self.last_update_success = False
+            self.async_update_listeners()
 
     @callback
     def _async_publish(self, data: CombinedModels) -> None:
@@ -171,7 +182,7 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[CombinedModels]):
                     self._async_publish(await self.api.receive())
                 except UnauthorizedError as err:
                     LOGGER.warning("HomeWizard token was rejected: %s", err)
-                    self.async_set_update_error(ConfigEntryAuthFailed("Token rejected"))
+                    self._async_set_unavailable(ConfigEntryAuthFailed("Token rejected"))
                     self.config_entry.async_start_reauth(self.hass)
                     return
                 except Exception as err:  # noqa: BLE001 - keep the reader alive
@@ -209,7 +220,7 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[CombinedModels]):
                 delay,
                 exc_info=unexpected,
             )
-        self.async_set_update_error(_communication_error(err))
+        self._async_set_unavailable(_communication_error(err))
         await self.api.close()
         await asyncio.sleep(delay)
 

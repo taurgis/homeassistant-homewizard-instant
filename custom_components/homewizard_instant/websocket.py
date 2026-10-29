@@ -6,6 +6,7 @@ import asyncio
 import os
 import ssl
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -185,7 +186,30 @@ def _external_problem(item: Any) -> str | None:
         return f"external value {reading!r} is not a number"
     if reading < 0 or reading > 1_000_000_000_000:
         return f"external value {reading} is out of range"
+    for key in ("unique_id", "type", "unit"):
+        if not isinstance(item.get(key), str) or not item[key]:
+            return f"external {key} {item.get(key)!r} is not a string"
+    stamp = item.get("timestamp")
+    try:
+        datetime.fromisoformat(stamp)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return f"external timestamp {stamp!r} is not a date"
     return None
+
+
+def _parse[T: (Device, Measurement, System)](
+    model: type[T], data: dict[str, Any], problems: list[str]
+) -> T:
+    """Parse with the library model, dropping each field it still rejects."""
+    while True:
+        try:
+            return model.from_dict(data)
+        except InvalidFieldValue as err:
+            key = "external" if err.field_name == "external_devices" else err.field_name
+            if key not in data:
+                raise
+            problems.append(f"{key}={data[key]!r} is invalid")
+            data = {name: value for name, value in data.items() if name != key}
 
 
 def _sanitize(topic: str, data: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
@@ -352,29 +376,30 @@ class HomeWizardWebSocket:
             self._warn("payload", "Ignoring HomeWizard %s message with invalid payload", topic)
             return self._reject_invalid()
         data, problems = _sanitize(topic, data)
-        if problems:
-            self._warn(
-                f"fields-{topic}",
-                "Ignoring invalid HomeWizard %s fields: %s",
-                topic,
-                "; ".join(problems),
-            )
         try:
             if topic == "device":
-                device = Device.from_dict(data)
+                device = _parse(Device, data, problems)
                 if not device.serial:
                     raise ValueError("device message without serial")
                 if device.id != self._identifier:
                     raise RequestError("WebSocket device identity changed")
                 self._topics[topic] = device
             elif topic == "measurement":
-                self._topics[topic] = Measurement.from_dict(data)
+                self._topics[topic] = _parse(Measurement, data, problems)
                 self.last_measurement = time.monotonic()
             else:
-                self._topics[topic] = System.from_dict(data)
+                self._topics[topic] = _parse(System, data, problems)
         except (MissingField, InvalidFieldValue, ValueError) as err:
             self._warn("invalid", "Ignoring invalid HomeWizard %s message: %s", topic, err)
             return self._reject_invalid()
+        finally:
+            if problems:
+                self._warn(
+                    f"fields-{topic}",
+                    "Ignoring invalid HomeWizard %s fields: %s",
+                    topic,
+                    "; ".join(problems),
+                )
         self._invalid = 0
         return True
 

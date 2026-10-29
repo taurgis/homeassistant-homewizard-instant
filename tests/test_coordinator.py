@@ -53,7 +53,7 @@ async def test_reconnect(hass, mock_config_entry, mock_combined_data, caplog):
             new=AsyncMock(),
         ) as sleep,
         patch.object(coordinator, "async_set_updated_data") as update,
-        patch.object(coordinator, "async_set_update_error") as unavailable,
+        patch.object(coordinator, "_async_set_unavailable") as unavailable,
     ):
         with caplog.at_level(logging.INFO), pytest.raises(asyncio.CancelledError):
             await coordinator._listen()
@@ -123,7 +123,7 @@ async def test_backoff_resets_only_after_a_stable_connection(
             new=AsyncMock(),
         ) as sleep,
         patch.object(coordinator, "async_set_updated_data"),
-        patch.object(coordinator, "async_set_update_error"),
+        patch.object(coordinator, "_async_set_unavailable"),
         pytest.raises(asyncio.CancelledError),
     ):
         await coordinator._listen()
@@ -295,3 +295,26 @@ async def test_start_and_stop_manage_the_watchdog(hass, mock_config_entry):
     assert len(coordinator._unsubs) == 2
     await coordinator.async_stop()
     assert coordinator._unsubs == []
+
+
+async def test_outage_is_logged_once_without_an_error_line(
+    hass, mock_config_entry, mock_combined_data, caplog
+):
+    coordinator = HWEnergyDeviceUpdateCoordinator(hass, mock_config_entry, AsyncMock())
+    coordinator.async_set_updated_data(mock_combined_data)
+    listener = Mock()
+    coordinator.async_add_listener(listener)
+    with (
+        patch(
+            "custom_components.homewizard_instant.coordinator.asyncio.sleep",
+            new=AsyncMock(),
+        ),
+        caplog.at_level(logging.WARNING),
+    ):
+        await coordinator._async_connection_lost(RequestError("gone"), 1, unexpected=False)
+    assert not coordinator.last_update_success
+    assert coordinator.last_exception.translation_key == "communication_error"
+    listener.assert_called_once()
+    assert [r.levelname for r in caplog.records if r.levelno >= logging.WARNING] == [
+        "WARNING"
+    ]
