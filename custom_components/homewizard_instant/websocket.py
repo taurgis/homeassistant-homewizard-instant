@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import ssl
+import time
 from pathlib import Path
 from typing import Any
 
@@ -74,7 +75,6 @@ def _measurement_ranges() -> dict[str, tuple[float, float]]:
     )
     ranges.update(
         {
-            "tariff": (1, 4),
             "protocol_version": (1, 999),
             "frequency_hz": (0, 100),
             "average_power_15m_w": (-1_000_000, 1_000_000),
@@ -85,7 +85,10 @@ def _measurement_ranges() -> dict[str, tuple[float, float]]:
 
 
 _MEASUREMENT_RANGES = _measurement_ranges()
-_SYSTEM_RANGES = _bounds(-120, 0, "wifi_rssi_db") | _bounds(
+# RSSI of -127 is a normal "no signal" reading. Tariff is intentionally absent:
+# python-homewizard-energy already nulls values outside 1..4 and keeps the rest
+# of the snapshot. Rejecting it here would freeze power for those meters.
+_SYSTEM_RANGES = _bounds(-200, 0, "wifi_rssi_db") | _bounds(
     0, 10 * 365 * 24 * 3600, "uptime_s"
 ) | _bounds(0, 100, "status_led_brightness_pct")
 _TOPIC_RANGES = {
@@ -93,6 +96,46 @@ _TOPIC_RANGES = {
     "measurement": _MEASUREMENT_RANGES,
     "system": _SYSTEM_RANGES,
 }
+_WARNING_INTERVAL = 60.0
+_INVALID_LIMIT = 30
+_last_warning: dict[str, float] = {}
+
+
+def _warn(key: str, message: str, *args: object) -> None:
+    """Log a repeated socket fault once a minute instead of once a frame."""
+    now = time.monotonic()
+    previous = _last_warning.get(key)
+    if previous is not None and now - previous < _WARNING_INTERVAL:
+        LOGGER.debug(message, *args)
+        return
+    _last_warning[key] = now
+    LOGGER.warning(message, *args)
+
+
+def _certificate_bundle(text: str) -> str | None:
+    """Return PEM certificates that OpenSSL can parse."""
+    marker = "-----END CERTIFICATE-----"
+    certificates: list[str] = []
+    rest = text
+    while True:
+        start = rest.find("-----BEGIN CERTIFICATE-----")
+        if start < 0:
+            break
+        end = rest.find(marker, start)
+        if end < 0:
+            return None
+        end += len(marker)
+        pem = rest[start:end]
+        try:
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            context.load_verify_locations(cadata=pem)
+        except ssl.SSLError:
+            return None
+        certificates.append(pem)
+        rest = rest[end:]
+    if not certificates:
+        return None
+    return "\n".join(certificates) + "\n"
 
 
 def trust_development_ca() -> None:
@@ -107,18 +150,24 @@ def trust_development_ca() -> None:
     if not ca_file or _APPLIED_DEV_CA == ca_file:
         return
     try:
-        extra = Path(ca_file).read_text(encoding="utf-8").strip()
+        extra = _certificate_bundle(Path(ca_file).read_text(encoding="utf-8"))
     except OSError as err:
         LOGGER.warning("HomeWizard development CA was not read: %s", err)
         return
-    if "BEGIN CERTIFICATE" not in extra:
+    if extra is None:
         LOGGER.warning("HomeWizard development CA file does not contain a certificate")
         return
     if extra not in cacert_mod.CACERT:
-        cacert_mod.CACERT = f"{cacert_mod.CACERT.rstrip()}\n{extra}\n"
+        cacert_mod.CACERT = f"{cacert_mod.CACERT.rstrip()}\n{extra}"
     v2.CACERT = cacert_mod.CACERT  # type: ignore[attr-defined]
     CACERT = cacert_mod.CACERT
     _APPLIED_DEV_CA = ca_file
+    LOGGER.warning(
+        "HomeWizard development CA at %s is active. Certificates it signs are "
+        "trusted for this process, including by other HomeWizard clients. Unset "
+        "HOMEWIZARD_DEV_CA outside the lab",
+        ca_file,
+    )
 
 
 def create_ssl_context() -> ssl.SSLContext:
@@ -184,11 +233,13 @@ class HomeWizardWebSocket:
         self._context = context
         self._socket: ClientWebSocketResponse | None = None
         self._topics: dict[str, Any] = {}
+        self._invalid = 0
 
     async def connect(self) -> CombinedModels:
         """Authenticate and wait for every initial snapshot before becoming available."""
         await self.close()
         self._topics.clear()
+        self._invalid = 0
         try:
             async with asyncio.timeout(30):
                 self._socket = await self._session.ws_connect(
@@ -236,10 +287,16 @@ class HomeWizardWebSocket:
         try:
             payload = message.json()
         except ValueError as err:
-            LOGGER.warning("Ignoring malformed HomeWizard WebSocket message: %s", err)
+            _warn(
+                "malformed",
+                "Ignoring malformed HomeWizard WebSocket message: %s",
+                err,
+            )
+            self._reject_invalid()
             return None
         if not isinstance(payload, dict) or not isinstance(payload.get("type"), str):
-            LOGGER.warning("Ignoring HomeWizard WebSocket message with unexpected shape")
+            _warn("shape", "Ignoring HomeWizard WebSocket message with unexpected shape")
+            self._reject_invalid()
             return None
         if payload["type"] == "error":
             data = payload.get("data", {})
@@ -260,31 +317,43 @@ class HomeWizardWebSocket:
             return False
         data = message.get("data")
         if not isinstance(data, dict):
-            LOGGER.warning("Ignoring HomeWizard %s message with invalid payload", topic)
-            return False
+            _warn("payload", "Ignoring HomeWizard %s message with invalid payload", topic)
+            return self._reject_invalid()
         if _contains_null(data):
-            LOGGER.warning("Ignoring HomeWizard %s message with null fields", topic)
-            return False
+            _warn("null", "Ignoring HomeWizard %s message with null fields", topic)
+            return self._reject_invalid()
         if problem := _range_problem(topic, data):
             kind = "wrong type" if "expected a number" in problem else "out-of-range"
-            LOGGER.warning("Ignoring %s HomeWizard %s value: %s", kind, topic, problem)
-            return False
+            _warn(
+                f"range-{kind}",
+                "Ignoring %s HomeWizard %s value: %s",
+                kind,
+                topic,
+                problem,
+            )
+            return self._reject_invalid()
         try:
             if topic == "device":
                 device = Device.from_dict(data)
                 if device.id != self._identifier:
-                    raise RequestError(
-                        f"WebSocket device identity changed to {device.id}"
-                    )
+                    raise RequestError("WebSocket device identity changed")
                 self._topics[topic] = device
             elif topic == "measurement":
                 self._topics[topic] = Measurement.from_dict(data)
             else:
                 self._topics[topic] = System.from_dict(data)
         except (MissingField, InvalidFieldValue, ValueError) as err:
-            LOGGER.warning("Ignoring invalid HomeWizard %s message: %s", topic, err)
-            return False
+            _warn("invalid", "Ignoring invalid HomeWizard %s message: %s", topic, err)
+            return self._reject_invalid()
+        self._invalid = 0
         return True
+
+    def _reject_invalid(self) -> bool:
+        """Keep the last good snapshot, unless the stream is stuck on junk."""
+        self._invalid += 1
+        if self._invalid >= _INVALID_LIMIT:
+            raise RequestError("HomeWizard WebSocket sent repeated invalid messages")
+        return False
 
     def _snapshot(self) -> CombinedModels:
         return CombinedModels(

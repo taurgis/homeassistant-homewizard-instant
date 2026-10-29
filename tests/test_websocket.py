@@ -226,6 +226,44 @@ async def test_identity_change_after_connect():
     await api.close()
 
 
+async def test_invalid_tariff_keeps_the_measurement():
+    """Meters sometimes report tariff 0. The library clears it and keeps power."""
+    api, _, socket = client(initial())
+    await api.connect()
+    socket.receive.side_effect = [
+        frame("measurement", {"power_w": 80, "energy_import_kwh": 4, "tariff": 0})
+    ]
+    updated = await api.receive()
+    assert updated.measurement.power_w == 80
+    assert updated.measurement.energy_import_kwh == 4
+    assert updated.measurement.tariff is None
+    await api.close()
+
+
+async def test_low_rssi_is_a_valid_system_update():
+    api, _, socket = client(initial())
+    await api.connect()
+    socket.receive.side_effect = [
+        frame("system", {"wifi_rssi_db": -127, "uptime_s": 15, "wifi_ssid": "lab"})
+    ]
+    updated = await api.receive()
+    assert updated.system is not None
+    assert updated.system.uptime_s == 15
+    assert updated.system.wifi_strength_pct == 0
+    await api.close()
+
+
+async def test_repeated_invalid_frames_fail_the_stream():
+    from custom_components.homewizard_instant.websocket import _INVALID_LIMIT
+
+    junk = [WSMessage(WSMsgType.TEXT, "{", None) for _ in range(_INVALID_LIMIT)]
+    api, _, _socket = client(initial() + junk)
+    await api.connect()
+    with pytest.raises(RequestError, match="repeated invalid"):
+        await api.receive()
+    await api.close()
+
+
 async def test_wrong_identity():
     frames = initial()
     frames[3] = frame("device", {**DEVICE, "serial": "other"})

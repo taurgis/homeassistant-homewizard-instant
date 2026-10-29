@@ -164,7 +164,13 @@ class MeterServer:
         await socket.send_json(
             {"type": "authorization_requested", "data": {"api_version": "2.0.0"}}
         )
-        incoming = await socket.receive()
+        try:
+            incoming = await asyncio.wait_for(
+                socket.receive(), timeout=self.meter.auth_timeout
+            )
+        except TimeoutError:
+            await socket.close()
+            return
         if incoming.type != WSMsgType.TEXT:
             return
         try:
@@ -172,13 +178,20 @@ class MeterServer:
         except ValueError:
             return
         token = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(payload, dict) or payload.get("type") != "authorization":
+            await socket.send_json(
+                {"type": "error", "data": {"message": "user:unauthorized"}}
+            )
+            await socket.close()
+            return
         header = f"Bearer {token}" if isinstance(token, str) else None
         if not self.meter.authorized(header):
             await socket.send_json({"type": "error", "data": {"message": "user:unauthorized"}})
             await socket.close()
             return
         await socket.send_json({"type": "authorized"})
-        pusher = asyncio.create_task(self._push_loop(socket))
+        subscribed: set[str] = set()
+        pusher = asyncio.create_task(self._push_loop(socket, subscribed))
         try:
             async for message in socket:
                 if message.type != WSMsgType.TEXT or self.meter.faults.hang:
@@ -191,7 +204,8 @@ class MeterServer:
                     continue
                 if isinstance(client, dict) and client.get("type") == "subscribe":
                     topic = client.get("data")
-                    if isinstance(topic, str):
+                    if isinstance(topic, str) and topic in {"device", "measurement", "system"}:
+                        subscribed.add(topic)
                         await self._send_topic(socket, topic)
         finally:
             pusher.cancel()
@@ -205,12 +219,14 @@ class MeterServer:
         await socket.send_json({"type": topic, "data": data})
         self.meter.pushes += 1
 
-    async def _push_loop(self, socket: web.WebSocketResponse) -> None:
+    async def _push_loop(
+        self, socket: web.WebSocketResponse, subscribed: set[str]
+    ) -> None:
         next_system = asyncio.get_running_loop().time() + 30
         while not socket.closed:
             interval = self.meter.faults.slow_interval or self.meter.push_interval
             await asyncio.sleep(interval)
-            if socket.closed or self.meter.faults.hang:
+            if socket.closed or self.meter.faults.hang or not subscribed:
                 continue
             fault = self.meter.fault_message()
             try:
@@ -222,7 +238,13 @@ class MeterServer:
                     self.meter.pushes += 1
                 else:
                     now = asyncio.get_running_loop().time()
-                    topic = "system" if now >= next_system else "measurement"
+                    topic = (
+                        "system"
+                        if now >= next_system and "system" in subscribed
+                        else "measurement"
+                    )
+                    if topic not in subscribed:
+                        continue
                     if topic == "system":
                         next_system = now + 30
                     await self._send_topic(socket, topic)
@@ -255,7 +277,7 @@ class MeterServer:
         if name in {"restart", "tls_change"}:
             self._ssl = self._untrusted if self.meter.faults.tls_untrusted else self._trusted
             await self.restart_https()
-        if name == "revoke_token":
+        if name in {"revoke_token", "refuse_auth"}:
             await self._reject_sockets()
         return _json({"fault": name, "faults": self.meter.faults.public()})
 

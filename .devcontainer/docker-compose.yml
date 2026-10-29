@@ -23,6 +23,7 @@ services:
     environment:
       METER_SERIAL: aabbccddeeff
       METER_PROFILE: 3phase
+      BIND_HOST: 0.0.0.0
       CA_DIR: /certs
       HTTPS_PORT: "443"
       CONTROL_PORT: "8080"
@@ -49,6 +50,7 @@ services:
     environment:
       METER_SERIAL: "112233445566"
       METER_PROFILE: 1phase
+      BIND_HOST: 0.0.0.0
       CA_DIR: /certs
       HTTPS_PORT: "443"
       CONTROL_PORT: "8080"

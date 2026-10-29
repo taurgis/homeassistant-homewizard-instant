@@ -73,3 +73,44 @@ def test_serialize_data_fallback() -> None:
     """Test _serialize_data fallback wraps value."""
 
     assert _serialize_data(123) == {"value": 123}
+
+
+def test_serialize_library_models_are_json_and_redacted() -> None:
+    """AwesomeVersion and datetimes must not break the diagnostics download."""
+    import json
+
+    from homeassistant.components.diagnostics import async_redact_data
+    from homewizard_energy.models import CombinedModels, Device, Measurement, System
+
+    from custom_components.homewizard_instant.diagnostics import TO_REDACT
+
+    device = Device.from_dict(
+        {
+            "product_type": "HWE-P1",
+            "product_name": "P1 Meter",
+            "serial": "aabbccddeeff",
+            "firmware_version": "6.0204",
+            "api_version": "2.0.0",
+        }
+    )
+    measurement = Measurement.from_dict(
+        {
+            "power_w": 1,
+            "energy_import_kwh": 2,
+            "unique_id": "4E65766572",
+            "timestamp": "2026-10-29T12:00:00",
+        }
+    )
+    system = System.from_dict(
+        {"wifi_ssid": "secret-ssid", "wifi_rssi_db": -70, "uptime_s": 5}
+    )
+    dumped = _serialize_data(CombinedModels(device, measurement, None, system))
+    encoded = json.dumps(dumped)
+    assert dumped["device"]["api_version"] == "2.0.0"
+    assert "2026-10-29" in encoded
+    redacted = async_redact_data(dumped, TO_REDACT)
+    text = json.dumps(redacted)
+    assert redacted["device"]["serial"] == "**REDACTED**"
+    assert redacted["system"]["wifi_ssid"] == "**REDACTED**"
+    assert "aabbccddeeff" not in text
+    assert "secret-ssid" not in text

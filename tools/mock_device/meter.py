@@ -16,6 +16,7 @@ from .certs import hostname
 from .profiles import PROFILES
 
 PAIRING_WINDOW_SECONDS = 30
+AUTH_TIMEOUT_SECONDS = 40
 IDENTITY_SERIAL = "ffffffffffff"
 _USER_RE = re.compile(r"local/[a-zA-Z0-9\-_/\\# ]{1,40}")
 FAULT_NAMES = (
@@ -85,6 +86,7 @@ class Meter:
         self.token_path = token_path
         self._load_tokens()
         self.button_until = 0.0
+        self.auth_timeout = AUTH_TIMEOUT_SECONDS
         self.boot = time.monotonic()
         self.uptime_offset = 3600
         self.uptime_override: int | None = None

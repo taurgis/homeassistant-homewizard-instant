@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 GAS_UNIQUE_ID = "4730303031"  # hex for G0001
+GAS_UNIQUE_ID_1PHASE = "4730303032"  # hex for G0002
 WATER_UNIQUE_ID = "5730303031"  # hex for W0001
 
 
-def _gas(value: float = 2569.646) -> dict[str, object]:
+def _gas(value: float = 2569.646, unique_id: str = GAS_UNIQUE_ID) -> dict[str, object]:
     return {
-        "unique_id": GAS_UNIQUE_ID,
+        "unique_id": unique_id,
         "type": "gas_meter",
         "timestamp": "2026-10-29T12:00:00",
         "value": value,
@@ -111,7 +112,7 @@ def one_phase() -> dict[str, object]:
         "average_power_15m_w": 500,
         "monthly_power_peak_w": 2400,
         "monthly_power_peak_timestamp": "2026-10-11T18:04:00",
-        "external": [_gas(111.5)],
+        "external": [_gas(111.5, GAS_UNIQUE_ID_1PHASE)],
     }
 
 

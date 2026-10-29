@@ -61,9 +61,32 @@ async def test_connect_errors(hass, exception, code):
 async def test_connect_success(hass):
     api = AsyncMock()
     api.device.return_value = DEVICE
-    with patch(PREFIX + "HomeWizardEnergyV2", return_value=api):
+    with patch(PREFIX + "HomeWizardEnergyV2", return_value=api) as ctor:
         assert await async_try_connect(hass, "1.2.3.4", token="secret") == DEVICE
     api.close.assert_awaited_once()
+    assert ctor.call_args.kwargs["identifier"] is None
+
+
+async def test_known_serial_pins_tls_hostname(hass):
+    """Reauth must not send the token to a different HomeWizard certificate."""
+    api = AsyncMock()
+    api.device.return_value = DEVICE
+    api.get_token.return_value = "secret"
+    with (
+        patch(PREFIX + "HomeWizardEnergyV2", return_value=api) as ctor,
+        patch(PREFIX + "instance_id.async_get", return_value="abcdef1234567890"),
+    ):
+        await async_request_token(
+            hass, "1.2.3.4", product_type="HWE-P1", serial=DEVICE.serial
+        )
+        await async_try_connect(
+            hass,
+            "1.2.3.4",
+            token="secret",
+            product_type="HWE-P1",
+            serial=DEVICE.serial,
+        )
+    assert ctor.call_args.kwargs["identifier"] == "appliance/p1dongle/aabbccddeeff"
 
 
 async def test_token_request_unauthorized(hass):
@@ -155,11 +178,13 @@ async def test_reauth_preserves_entry(hass, legacy):
             data=entry.data,
         )
     with (
-        patch(PREFIX + "async_request_token", return_value="secret"),
-        patch(PREFIX + "async_try_connect", return_value=DEVICE),
+        patch(PREFIX + "async_request_token", return_value="secret") as request,
+        patch(PREFIX + "async_try_connect", return_value=DEVICE) as connect,
         patch.object(hass.config_entries, "async_reload", return_value=True),
     ):
         result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    assert request.await_args.kwargs["serial"] == DEVICE.serial
+    assert connect.await_args.kwargs["product_type"] == "HWE-P1"
     assert result["reason"] == "reauth_successful"
     assert entry.data == DATA
 
@@ -265,6 +290,7 @@ async def test_zeroconf(hass):
         DOMAIN, context={"source": "zeroconf"}, data=discovery
     )
     assert result["step_id"] == "discovery_confirm"
-    with patch(PREFIX + "async_request_token", return_value=None):
+    with patch(PREFIX + "async_request_token", return_value=None) as request:
         result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    assert request.await_args.kwargs["serial"] == DEVICE.serial
     assert result["step_id"] == "authorize"

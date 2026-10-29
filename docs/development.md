@@ -15,7 +15,9 @@ This page is for running the integration against a real Home Assistant and an em
 
 The integration is bind-mounted from `custom_components/homewizard_instant`. Home Assistant config is created in `.devcontainer/ha_config` on first start (gitignored).
 
-The meters speak HTTPS with a certificate shaped like a real P1 meter: common name and DNS SAN `appliance/p1dongle/<serial>`. `python-homewizard-energy` only trusts HomeWizard's appliance CA, and that private key is not public, so the lab CA is loaded only when `HOMEWIZARD_DEV_CA` points at a PEM file. Leave that variable unset on a normal install.
+The meters speak HTTPS with a certificate shaped like a real P1 meter: common name and DNS SAN `appliance/p1dongle/<serial>`. `python-homewizard-energy` only trusts HomeWizard's appliance CA, and that private key is not public, so the lab CA is loaded only when `HOMEWIZARD_DEV_CA` points at a PEM file that contains a real certificate. Loading it logs a warning, because every HomeWizard client in that process then trusts the lab CA. Leave the variable unset on a normal install.
+
+The WebSocket matches the v2 handshake. The meter sends `authorization_requested`, and the client must answer with `{"type":"authorization","data":"<token>"}` within 40 seconds. Measurement and system frames are pushed only after a `subscribe` for that topic. A client that has not subscribed stays quiet.
 
 ## Run it
 
@@ -66,7 +68,7 @@ Faults, posted as `{"name":"<fault>"}`:
 | --- | --- |
 | `drop` | Closes WebSockets. |
 | `hang` | Stops reading and writing until cleared. HTTP calls wait too. |
-| `refuse_auth` | Rejects the current token on HTTP and the socket. Pairing still accepts a button press. |
+| `refuse_auth` | Closes current sockets with `user:unauthorized` and rejects the token until cleared. Pairing still accepts a button press. |
 | `revoke_token` | Deletes tokens and sends `user:unauthorized`. |
 | `malformed_json` | Pushes a truncated JSON frame. |
 | `unknown_topic` | Pushes a `batteries` topic this integration does not subscribe to. |
@@ -80,6 +82,8 @@ Faults, posted as `{"name":"<fault>"}`:
 | `tls_change` | Restarts HTTPS with a certificate the lab CA did not sign. |
 
 `POST /clear` removes the flags and restores the trusted certificate. `POST /push` with `{"topic":"system"}` sends a system snapshot immediately. `POST /uptime` with `{"seconds":10}` simulates a reboot. `POST /overlay` merges fields into the next measurement; `{"reset":true}` removes them.
+
+The control API has no authentication. Compose publishes it on `127.0.0.1` only. A meter started on the host binds to `127.0.0.1` unless `BIND_HOST` is set. Compose sets `BIND_HOST=0.0.0.0` so Home Assistant on the lab network can reach the meters; the host ports stay on localhost.
 
 Run the meter on the host, without Docker, from the repo root. Port 443 needs root. The control port can be anything.
 
