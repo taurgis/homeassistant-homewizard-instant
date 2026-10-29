@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.4
+
+### Patch Changes
+
+- 90b6dbe: Fix external meter links to use the parent device id so Home Assistant stops logging the via_device deprecation warning.
+
 ## 1.0.3
 
 ### Patch Changes
