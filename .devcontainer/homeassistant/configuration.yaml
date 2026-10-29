@@ -1,0 +1,17 @@
+homeassistant:
+  name: HomeWizard Instant Lab
+  latitude: 52.37
+  longitude: 4.89
+  elevation: 0
+  unit_system: metric
+  time_zone: Europe/Amsterdam
+  currency: EUR
+  country: NL
+
+default_config:
+
+logger:
+  default: warning
+  logs:
+    custom_components.homewizard_instant: debug
+    homewizard_energy: info

@@ -54,6 +54,10 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[CombinedModels]):
         except UnauthorizedError as err:
             raise ConfigEntryAuthFailed from err
         except CONNECTION_ERRORS as err:
+            LOGGER.warning(
+                "HomeWizard WebSocket connection failed: %s",
+                str(err).strip() or type(err).__name__,
+            )
             raise UpdateFailed(
                 translation_domain=DOMAIN, translation_key="communication_error"
             ) from err
@@ -75,11 +79,17 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[CombinedModels]):
                         connected = True
                     self.async_set_updated_data(await self.api.receive())
                     delay = 1
-                except UnauthorizedError:
+                except UnauthorizedError as err:
+                    LOGGER.warning("HomeWizard token was rejected: %s", err)
                     self.async_set_update_error(ConfigEntryAuthFailed("Token rejected"))
                     self.config_entry.async_start_reauth(self.hass)
                     return
-                except CONNECTION_ERRORS:
+                except CONNECTION_ERRORS as err:
+                    LOGGER.warning(
+                        "HomeWizard WebSocket unavailable (%s); retrying in %s s",
+                        str(err).strip() or type(err).__name__,
+                        delay,
+                    )
                     self.async_set_update_error(
                         UpdateFailed(
                             translation_domain=DOMAIN,

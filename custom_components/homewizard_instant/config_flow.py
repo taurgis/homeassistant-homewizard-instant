@@ -26,6 +26,7 @@ from homewizard_energy.errors import (
 from homewizard_energy.models import Device
 
 from .const import CONF_PRODUCT_NAME, CONF_PRODUCT_TYPE, CONF_SERIAL, DOMAIN
+from .websocket import trust_development_ca
 
 
 class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -199,6 +200,7 @@ async def async_try_connect(
     token: str | None = None,
 ) -> Device:
     """Read v2 identity with the Home Assistant-managed session."""
+    await hass.async_add_executor_job(trust_development_ca)
     api = HomeWizardEnergyV2(
         ip_address,
         token=token,
@@ -218,12 +220,15 @@ async def async_try_connect(
 
 async def async_request_token(hass: HomeAssistant, ip_address: str) -> str | None:
     """Use a distinct user name so the official integration's token stays valid."""
+    await hass.async_add_executor_job(trust_development_ca)
     uuid = await instance_id.async_get(hass)
     api = HomeWizardEnergyV2(ip_address, clientsession=async_get_clientsession(hass))
     try:
         return await api.get_token(f"homewizard-instant#{uuid[:12]}")
     except DisabledError:
         return None
+    except UnauthorizedError as err:
+        raise RecoverableError("Token rejected", "invalid_auth") from err
     except (NotFoundError, UnsupportedError) as err:
         raise RecoverableError("API v2 required", "unsupported_api_version") from err
     except RequestError as err:

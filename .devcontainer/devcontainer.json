@@ -1,14 +1,9 @@
 {
-  "name": "HomeWizard Instant Custom Component",
-  "image": "ghcr.io/home-assistant/home-assistant:2026.2.3",
-  "appPort": ["7123:8123"],
-  "postStartCommand": "python -m homeassistant -c /config",
-  "runArgs": ["-e", "GIT_EDITOR=code --wait", "--privileged"],
-  "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
-  "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/${localWorkspaceFolderBasename},type=bind,consistency=cached",
-  "containerEnv": {
-    "WORKSPACE_DIRECTORY": "/workspaces/${localWorkspaceFolderBasename}"
-  },
+  "name": "HomeWizard Instant",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "homeassistant",
+  "workspaceFolder": "/workspaces/homeassistant-homewizard-instant",
+  "shutdownAction": "stopCompose",
   "customizations": {
     "vscode": {
       "extensions": [
@@ -31,7 +26,6 @@
     }
   },
   "mounts": [
-    "type=bind,source=${localWorkspaceFolder}/.devcontainer/ha_config,target=/config,consistency=cached",
-    "type=bind,source=${localWorkspaceFolder}/custom_components,target=/config/custom_components,consistency=cached"
+    "source=${localWorkspaceFolder},target=/workspaces/homeassistant-homewizard-instant,type=bind"
   ]
 }

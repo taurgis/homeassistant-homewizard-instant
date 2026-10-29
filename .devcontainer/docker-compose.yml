@@ -1,0 +1,99 @@
+# Lab Home Assistant plus two emulated P1 meters.
+# Default image is current Home Assistant. For the documented minimum:
+#   HA_IMAGE_TAG=2025.10.4 docker compose up -d --build
+
+name: homewizard-instant
+
+services:
+  ca:
+    build: ../tools/mock_device
+    environment:
+      MOCK_MODE: ca
+      CA_DIR: /certs
+    volumes:
+      - certs:/certs
+    command: ["python", "-m", "mock_device", "--init-ca", "--ca-dir", "/certs"]
+    restart: "no"
+
+  meter-3phase:
+    build: ../tools/mock_device
+    depends_on:
+      ca:
+        condition: service_completed_successfully
+    environment:
+      METER_SERIAL: aabbccddeeff
+      METER_PROFILE: 3phase
+      CA_DIR: /certs
+      HTTPS_PORT: "443"
+      CONTROL_PORT: "8080"
+    volumes:
+      - certs:/certs:ro
+    networks:
+      lab:
+        ipv4_address: 172.30.28.10
+    ports:
+      - "127.0.0.1:8443:443"
+      - "127.0.0.1:8081:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  meter-1phase:
+    build: ../tools/mock_device
+    depends_on:
+      ca:
+        condition: service_completed_successfully
+    environment:
+      METER_SERIAL: "112233445566"
+      METER_PROFILE: 1phase
+      CA_DIR: /certs
+      HTTPS_PORT: "443"
+      CONTROL_PORT: "8080"
+    volumes:
+      - certs:/certs:ro
+    networks:
+      lab:
+        ipv4_address: 172.30.28.11
+    ports:
+      - "127.0.0.1:8444:443"
+      - "127.0.0.1:8082:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:${HA_IMAGE_TAG:-2026.10.4}
+    depends_on:
+      ca:
+        condition: service_completed_successfully
+    environment:
+      HOMEWIZARD_DEV_CA: /certs/ca.pem
+      TZ: Europe/Amsterdam
+    volumes:
+      - ./ha_config:/config
+      - ./homeassistant/configuration.yaml:/seed/configuration.yaml:ro
+      - ./homeassistant/entrypoint.sh:/seed/entrypoint.sh:ro
+      - certs:/certs:ro
+      - ../custom_components/homewizard_instant:/config/custom_components/homewizard_instant
+    entrypoint: ["/bin/sh", "/seed/entrypoint.sh"]
+    ports:
+      - "127.0.0.1:8123:8123"
+    networks:
+      lab:
+        ipv4_address: 172.30.28.2
+    restart: unless-stopped
+
+networks:
+  lab:
+    ipam:
+      config:
+        - subnet: 172.30.28.0/24
+
+volumes:
+  certs:
