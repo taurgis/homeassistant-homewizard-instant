@@ -169,10 +169,31 @@ def entries(client: Client) -> list[dict]:
 
 
 def flows(client: Client) -> list[dict]:
-    progress = client.call("GET", "/api/config/config_entries/flow")
-    if isinstance(progress, dict):
-        return progress.get("config_entries", progress.get("flows", []))
-    return progress
+    """List in-progress flows.
+
+    Home Assistant 2026 removed GET /api/config/config_entries/flow.
+    The websocket command is the supported path on 2025.10 and 2026.10.
+    """
+    import asyncio
+
+    import aiohttp
+
+    async def _progress() -> list[dict]:
+        async with aiohttp.ClientSession() as session:
+            async with session.ws_connect(f"{HA}/api/websocket") as websocket:
+                await websocket.receive_json()
+                await websocket.send_json({"type": "auth", "access_token": client.token})
+                auth = await websocket.receive_json()
+                if auth.get("type") != "auth_ok":
+                    raise RuntimeError(auth)
+                await websocket.send_json({"id": 1, "type": "config_entries/flow/progress"})
+                message = await websocket.receive_json()
+                if not message.get("success"):
+                    raise RuntimeError(message)
+                result = message.get("result") or []
+                return result if isinstance(result, list) else []
+
+    return asyncio.run(_progress())
 
 
 def finish_pairing(client: Client, flow_id: str, meter: str) -> dict:

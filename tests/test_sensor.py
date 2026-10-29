@@ -204,6 +204,37 @@ async def test_import_tariff_t1_sensor_does_not_depend_on_export_t2(
     )
 
 
+async def test_external_meter_added_after_setup(
+    hass, mock_config_entry, mock_combined_data
+):
+    """A utility meter that shows up later still gets an entity."""
+    from homewizard_energy.models import ExternalDevice
+
+    mock_config_entry.add_to_hass(hass)
+    coordinator = HWEnergyDeviceUpdateCoordinator(
+        hass, mock_config_entry, api=AsyncMock()
+    )
+    coordinator.data = mock_combined_data
+    coordinator.last_update_success = True
+    mock_config_entry.runtime_data = coordinator
+    added: list[object] = []
+
+    def _add_entities(entities):
+        added.extend(entities)
+
+    await async_setup_entry(hass, mock_config_entry, _add_entities)
+    before = len(added)
+    gas = mock_combined_data.measurement.external_devices["gas123"]
+    mock_combined_data.measurement.external_devices["water1"] = type(gas)(
+        type=ExternalDevice.DeviceType.WATER_METER,
+        unit="m3",
+        value=3,
+    )
+    coordinator.async_set_updated_data(mock_combined_data)
+    assert len(added) == before + 1
+    assert getattr(added[-1], "_device_id", None) == "water1"
+
+
 async def test_zero_energy_stays_available(hass, mock_config_entry, mock_combined_data):
     """A reading of 0 kWh is a real total, not a missing value."""
     coordinator = HWEnergyDeviceUpdateCoordinator(hass, mock_config_entry, AsyncMock())
@@ -268,12 +299,16 @@ async def test_uptime_does_not_drift_on_measurement_push(
 
     coordinator = HWEnergyDeviceUpdateCoordinator(hass, mock_config_entry, AsyncMock())
     coordinator.data = mock_combined_data
+    coordinator.last_update_success = True
     sensor = HomeWizardSensorEntity(
         coordinator, next(item for item in SENSORS if item.key == "uptime")
     )
     initial = sensor.native_value
     freezer.tick(timedelta(minutes=10))
+    assert sensor.available is True
     assert sensor.native_value == initial
+    coordinator.data.system.uptime_s = None
+    assert sensor.available is False
     coordinator.data = replace(
         mock_combined_data, system=replace(mock_combined_data.system, uptime_s=1)
     )

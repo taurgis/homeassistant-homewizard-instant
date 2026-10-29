@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import socket
 import ssl
 import sys
@@ -9,6 +10,7 @@ import threading
 from pathlib import Path
 
 import pytest
+from aiohttp import WSMsgType
 from aiohttp.test_utils import TestClient, TestServer
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
@@ -16,6 +18,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from mock_device.certs import ensure_ca, hostname, issue_cert
 from mock_device.meter import Meter
 from mock_device.server import MeterServer
+
+
+def _enable_sockets() -> None:
+    """pytest-socket's marker is undone by the Home Assistant plugin hook."""
+    try:
+        from pytest_socket import enable_socket
+    except ImportError:
+        return
+    enable_socket()
 
 
 def test_button_then_token_and_fault_payloads() -> None:
@@ -42,6 +53,8 @@ def test_button_then_token_and_fault_payloads() -> None:
     single = meter.measurement_payload()
     assert "power_l2_w" not in single
     assert single["power_l1_w"] > 0
+    other = Meter("112233445566", "3phase")
+    assert single["external"][0]["unique_id"] != other.measurement_payload()["external"][0]["unique_id"]
     meter.apply_fault("malformed_json")
     assert isinstance(meter.fault_message(), str)
     meter.clear_faults()
@@ -50,12 +63,22 @@ def test_button_then_token_and_fault_payloads() -> None:
     meter.clear_faults()
     meter.apply_fault("identity_change")
     assert meter.device_payload()["serial"] != meter.serial
+    first = body["token"]
+    status, body = meter.issue_token("local/homewizard-instant#abcdef123456")
+    assert status == 200
+    assert body["token"] != first
+    assert meter.authorized(f"Bearer {first}") is False
+    meter.button_until = 0
+    status, expired = meter.issue_token("local/homewizard-instant#abcdef123456")
+    assert status == 403
+    assert expired["error"] == "user:creation-not-enabled"
     meter.revoke()
     assert meter.authorized(f"Bearer {body['token']}") is False
 
 
 @pytest.mark.enable_socket
 async def test_http_pairing_and_websocket_snapshots() -> None:
+    _enable_sockets()
     meter = Meter("112233445566", "1phase", push_interval=30)
     server = MeterServer(meter, Path("/tmp"), Path("/tmp"))
     async with (
@@ -87,9 +110,43 @@ async def test_http_pairing_and_websocket_snapshots() -> None:
         state = await (await control.get("/state")).json()
         assert state["websockets"] == 0
 
+        async with api.ws_connect("/api/ws") as websocket:
+            await websocket.receive_json()
+            await websocket.send_json({"type": "subscribe", "data": token})
+            rejected = await websocket.receive_json()
+            assert rejected["type"] == "error"
+            assert rejected["data"]["message"] == "user:unauthorized"
+
+
+@pytest.mark.enable_socket
+async def test_socket_waits_for_subscribe_and_auth_timeout() -> None:
+    """Pushes start after subscribe, and a silent client is dropped at 40s."""
+    _enable_sockets()
+    meter = Meter("aabbccddeeff", "3phase", push_interval=0.05)
+    meter.auth_timeout = 0.05
+    meter.press_button()
+    _status, body = meter.issue_token("local/app")
+    server = MeterServer(meter, Path("/tmp"), Path("/tmp"))
+    async with TestClient(TestServer(server.https_app())) as api:
+        async with api.ws_connect("/api/ws") as quiet:
+            assert (await quiet.receive_json())["type"] == "authorization_requested"
+            closing = await quiet.receive()
+            assert closing.type in {WSMsgType.CLOSE, WSMsgType.CLOSED}
+        meter.auth_timeout = 5
+        async with api.ws_connect("/api/ws") as websocket:
+            await websocket.receive_json()
+            await websocket.send_json({"type": "authorization", "data": body["token"]})
+            assert (await websocket.receive_json())["type"] == "authorized"
+            try:
+                await asyncio.wait_for(websocket.receive(), 0.2)
+            except TimeoutError:
+                return
+            raise AssertionError("the meter pushed a topic before subscribe")
+
 
 @pytest.mark.enable_socket
 def test_device_certificate_matches_appliance_hostname(tmp_path: Path) -> None:
+    _enable_sockets()
     if not Path("/usr/bin/openssl").exists():
         pytest.skip("openssl is required to mint the lab certificate")
     ca_cert, ca_key = ensure_ca(tmp_path / "ca")

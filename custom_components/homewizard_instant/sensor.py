@@ -27,7 +27,7 @@ from homeassistant.const import (
     UnitOfReactivePower,
     UnitOfVolume,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.typing import StateType
@@ -704,12 +704,14 @@ async def async_setup_entry(
             sw_version=p1.firmware_version,
             serial_number=p1.serial,
         )
+    known_external: set[str] = set()
     measurement = entry.runtime_data.data.measurement
     if measurement.external_devices is not None:
         for unique_id, device in measurement.external_devices.items():
             if device.type is not None and (
                 description := EXTERNAL_SENSORS.get(device.type)
             ):
+                known_external.add(unique_id)
                 # Add external device
                 entities.append(
                     HomeWizardExternalSensorEntity(
@@ -720,6 +722,32 @@ async def async_setup_entry(
                     )
                 )
 
+    @callback
+    def _add_external_meters() -> None:
+        """Create entities for utility meters that appear after setup."""
+        current = entry.runtime_data.data.measurement.external_devices
+        if not current:
+            return
+        fresh: list[SensorEntity] = []
+        for unique_id, device in current.items():
+            if unique_id in known_external or device.type is None:
+                continue
+            known_external.add(unique_id)
+            if description := EXTERNAL_SENSORS.get(device.type):
+                fresh.append(
+                    HomeWizardExternalSensorEntity(
+                        entry.runtime_data,
+                        description,
+                        unique_id,
+                        parent.id if parent is not None else None,
+                    )
+                )
+        if fresh:
+            async_add_entities(fresh)
+
+    entry.async_on_unload(
+        entry.runtime_data.async_add_listener(_add_external_meters)
+    )
     async_add_entities(entities)
 
 
@@ -769,7 +797,14 @@ class HomeWizardSensorEntity(HomeWizardEntity, SensorEntity):
     @property
     def available(self) -> bool:
         """Return availability of meter."""
-        return super().available and self.native_value is not None
+        if not super().available:
+            return False
+        # Uptime's native value caches the boot time. Availability checks must
+        # not run that update, or a clock tick during the check moves it.
+        if self.entity_description.key == "uptime":
+            system = self.coordinator.data.system
+            return system is not None and system.uptime_s is not None
+        return self.entity_description.value_fn(self.coordinator.data) is not None
 
 
 class HomeWizardExternalSensorEntity(HomeWizardEntity, SensorEntity):

@@ -18,7 +18,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Emulated HomeWizard P1 meter (API v2)")
     parser.add_argument("--serial", default=os.environ.get("METER_SERIAL", "aabbccddeeff"))
     parser.add_argument("--profile", default=os.environ.get("METER_PROFILE", "3phase"))
-    parser.add_argument("--host", default=os.environ.get("BIND_HOST", "0.0.0.0"))
+    parser.add_argument("--host", default=os.environ.get("BIND_HOST", "127.0.0.1"))
     parser.add_argument("--https-port", type=int, default=int(os.environ.get("HTTPS_PORT", "443")))
     parser.add_argument(
         "--control-port", type=int, default=int(os.environ.get("CONTROL_PORT", "8080"))
