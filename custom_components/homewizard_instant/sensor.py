@@ -17,7 +17,6 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.const import (
-    ATTR_VIA_DEVICE,
     PERCENTAGE,
     SIGNAL_STRENGTH_DECIBELS,
     EntityCategory,
@@ -50,7 +49,7 @@ else:
 
 from .const import DOMAIN
 from .coordinator import HomeWizardConfigEntry, HWEnergyDeviceUpdateCoordinator
-from .entity import HomeWizardEntity
+from .entity import HomeWizardEntity, ensure_meter_device_id
 
 SENSOR_DEVICE_CLASS_UNITS = cast(
     "dict[SensorDeviceClass, set[str]]",
@@ -756,11 +755,8 @@ class HomeWizardExternalSensorEntity(HomeWizardEntity, SensorEntity):
             model=coordinator.data.device.product_type,
             serial_number=device_unique_id,
         )
-        if coordinator.data.device.serial is not None:
-            self._attr_device_info[ATTR_VIA_DEVICE] = (
-                DOMAIN,
-                f"{DOMAIN}_{coordinator.data.device.serial}",
-            )
+        if (via_device_id := ensure_meter_device_id(coordinator)) is not None:
+            self._attr_device_info["via_device_id"] = via_device_id
 
     @property
     def native_value(self) -> float | int | str | None:
