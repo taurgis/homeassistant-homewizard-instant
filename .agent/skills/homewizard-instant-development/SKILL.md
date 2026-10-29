@@ -1,45 +1,46 @@
 ---
 name: homewizard-instant-development
-description: Repo-specific guidance for maintaining the 1s polling behavior, sensors, and avoiding conflicts with the official integration
+description: Repo-specific guidance for keeping real-time WebSocket updates, sensors, and side-by-side compatibility with the official integration
 ---
 
 # HomeWizard Instant Development
 
-This skill focuses on changes that must preserve the intent of this repository: **1 second polling** for P1 meters, while remaining safe and compatible with Home Assistant.
+This repository's purpose is **real-time P1 meter data**: every measurement the meter pushes over the API v2 WebSocket reaches Home Assistant, without a polling interval, while staying safe next to the official HomeWizard integration.
 
 ## When to Use
 
-- You want to tweak polling behavior or performance
-- You’re modifying unique IDs / device registry behavior
-- You’re making changes that might conflict with the official HomeWizard integration
+- You change update, reconnect or staleness behaviour
+- You're modifying unique IDs / device registry behavior
+- You're making changes that might conflict with the official HomeWizard integration
 
 ## Project Intent
 
-- The official integration tends to poll slower; this one is tuned for near real-time.
 - The domain is different (`homewizard_instant`) so it can run side-by-side.
+- Pairing uses a separate local user (`homewizard-instant#<instance id>`) so the official integration's token stays valid.
 
-## Polling Interval Policy
+## Update Policy
 
-- Polling is set in `custom_components/homewizard_instant/const.py` (`UPDATE_INTERVAL = 1s`).
-- Changing this alters the repository’s core purpose; only do so if explicitly requested.
+- Updates are pushed; there is no `update_interval`. The meter decides the rate (1 s for DSMR 5, 10 s for older meters).
+- `STALE_AFTER` in `const.py` (60 s) marks entities unavailable when the meter goes silent. Keep it above the slowest meter interval.
 
 ## Avoiding Conflicts with the Official Integration
 
-- Device registry identifiers are prefixed with `homewizard_instant` in `entity.py`.
+- Device registry identifiers are prefixed with `homewizard_instant` in `entity.py` (`p1_device_info`).
 - Keep identifiers stable; changing them causes device/entity duplication for users.
 
 ## Adding New User-Facing Text
 
-- Add text via `translations/en.json` and keep keys stable.
+- Add text to `strings.json` and mirror it to `translations/en.json`; keep keys stable.
 - Prefer `translation_key` on entity descriptions over hardcoded names.
 
 ## Local Dev / Smoke Testing
 
-- Use the VS Code task “Start Home Assistant” to run a dev instance.
-- Watch logs for the `homewizard_instant` logger.
+- `docs/development.md` describes the Docker lab with emulated API v2 meters and fault injection.
+- Watch logs for the `custom_components.homewizard_instant` logger.
 
-## Common “gotchas”
+## Common "gotchas"
 
-- Adding extra HTTP calls per update loop will overload the device at 1 Hz.
-- Creating entities without `has_fn` leads to many entities showing unavailable.
-- Raising raw exceptions instead of translation-aware `UpdateFailed` degrades UX.
+- Extra REST calls next to the WebSocket waste the meter's limited connections.
+- Entities are created when `has_fn` first becomes true (at setup or later); don't create them unconditionally.
+- Unexpected exceptions in the reader must reconnect, not end the task.
+- Raise translation-aware `UpdateFailed` instead of raw exceptions.

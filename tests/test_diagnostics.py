@@ -114,3 +114,21 @@ def test_serialize_library_models_are_json_and_redacted() -> None:
     assert redacted["system"]["wifi_ssid"] == "**REDACTED**"
     assert "aabbccddeeff" not in text
     assert "secret-ssid" not in text
+
+
+async def test_diagnostics_hide_external_meter_ids(
+    hass, mock_config_entry, mock_combined_data
+):
+    """External meter dict keys embed meter serials and must not leak."""
+    mock_config_entry.add_to_hass(hass)
+    coordinator = HWEnergyDeviceUpdateCoordinator(
+        hass, mock_config_entry, api=AsyncMock()
+    )
+    coordinator.data = mock_combined_data
+    mock_config_entry.runtime_data = coordinator
+
+    diagnostics = await async_get_config_entry_diagnostics(hass, mock_config_entry)
+
+    assert "gas123" not in str(diagnostics)
+    assert diagnostics["data"]["measurement"]["external_devices"][0]["value"] == 1.5
+    assert diagnostics["connection"]["last_update_success"] is True

@@ -37,7 +37,7 @@ The integration stores a v2 token under a separate local device user and keeps d
 
 ### Installation parameters
 
-- **Home Assistant 2025.10 or newer**.
+- **Home Assistant 2026.8 or newer** (the first release that ships `python-homewizard-energy` 10.2.0).
 - P1 meter firmware supporting **API v2 and `/api/ws`**. The API v1 local-API toggle is not used.
 - The device must be reachable on your local network.
 
@@ -45,7 +45,7 @@ The integration stores a v2 token under a separate local device user and keeps d
 
 One TLS-verified `wss://<host>/api/ws` connection authenticates and subscribes to `device`, `measurement` and `system`. Setup waits for all three initial snapshots. All entities read from the coordinator data.
 
-Disconnects mark entities unavailable and trigger reconnect attempts with backoff from 1 to 60 seconds. Revoked tokens start reauthentication. Unloading cancels the reader and closes the socket.
+Disconnects mark entities unavailable and trigger reconnect attempts with backoff from 1 to 60 seconds. If the socket stays up but the meter sends no measurement for 60 seconds (for example when the P1 cable is unplugged from the smart meter), sensors become unavailable until measurements resume. A field the meter reports as null or out of range makes only that sensor unavailable; the rest keep updating. Sensors for fields that first appear after setup are added automatically. Revoked tokens start reauthentication. Unloading cancels the reader and closes the socket.
 
 ### Upgrading from API v1
 
@@ -83,7 +83,7 @@ Existing entries prompt for one-time v2 pairing after updating and restarting. C
 
 ## Removal
 
-1. Remove the integration from **Settings → Devices & services**.
+1. Remove the integration from **Settings → Devices & services**. Home Assistant also deletes its local user from the P1 meter when the meter is reachable; otherwise remove it in the HomeWizard Energy app.
 2. If installed manually, delete `custom_components/homewizard_instant`.
 3. If installed via HACS, remove the repository from HACS and restart Home Assistant.
 

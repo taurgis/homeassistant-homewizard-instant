@@ -161,6 +161,8 @@ async def test_pairing_retry(hass, token, error):
     ):
         result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
     assert result["errors"] == {"base": error}
+    # A wrong address goes back to the address form instead of a dead end.
+    assert result["step_id"] == ("user" if error == "network_error" else "authorize")
 
 
 @pytest.mark.parametrize("legacy", [False, True])
@@ -232,9 +234,27 @@ async def test_reconfigure(hass):
     assert entry.data["ip_address"] == "2.3.4.5"
 
 
-async def test_duplicate(hass):
-    entry = MockConfigEntry(
+async def test_duplicate_address(hass):
+    MockConfigEntry(
         domain=DOMAIN, data=DATA, unique_id=f"{DOMAIN}_HWE-P1_{DEVICE.serial}"
+    ).add_to_hass(hass)
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
+    with patch(PREFIX + "async_request_token") as request:
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"ip_address": "1.2.3.4"}
+        )
+    assert result["reason"] == "already_configured"
+    request.assert_not_called()
+
+
+async def test_duplicate(hass):
+    """A known meter at a new address is updated instead of duplicated."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={**DATA, "ip_address": "9.9.9.9"},
+        unique_id=f"{DOMAIN}_HWE-P1_{DEVICE.serial}",
     )
     entry.add_to_hass(hass)
     result = await start_pairing(hass)
@@ -244,6 +264,7 @@ async def test_duplicate(hass):
     ):
         result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
     assert result["reason"] == "already_configured"
+    assert entry.data == DATA
 
 
 async def test_unsupported(hass):
@@ -271,7 +292,7 @@ async def test_dhcp(hass, known):
         context={"source": "dhcp"},
         data=SimpleNamespace(ip="2.3.4.5", macaddress="AA:BB:CC:DD:EE:FF"),
     )
-    assert result["reason"] == ("already_configured" if known else "unknown_error")
+    assert result["reason"] == ("already_configured" if known else "unknown_device")
     if known:
         assert entry.data["ip_address"] == "2.3.4.5"
         assert entry.data["token"] == "secret"
@@ -293,4 +314,100 @@ async def test_zeroconf(hass):
     with patch(PREFIX + "async_request_token", return_value=None) as request:
         result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
     assert request.await_args.kwargs["serial"] == DEVICE.serial
+    assert result["step_id"] == "authorize"
+
+
+@pytest.mark.parametrize("failure", [None, RequestError(), ValueError("bad body")])
+async def test_revoke_token(hass, caplog, failure):
+    from custom_components.homewizard_instant.config_flow import async_revoke_token
+
+    with patch(PREFIX + "HomeWizardEnergyV2") as cls:
+        api = cls.return_value
+        api.delete_token = AsyncMock(side_effect=failure)
+        api.close = AsyncMock()
+        await async_revoke_token(
+            hass, "1.2.3.4", "secret", product_type="HWE-P1", serial=DEVICE.serial
+        )
+    assert cls.call_args.kwargs["identifier"] == f"appliance/p1dongle/{DEVICE.serial}"
+    api.delete_token.assert_awaited_once_with()
+    api.close.assert_awaited_once()
+    assert ("Could not remove" in caplog.text) == (failure is not None)
+
+
+async def test_reconfigure_with_revoked_token_saves_address(hass):
+    entry = MockConfigEntry(
+        domain=DOMAIN, data=DATA, unique_id=f"{DOMAIN}_HWE-P1_{DEVICE.serial}"
+    )
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "reconfigure", "entry_id": entry.entry_id}
+    )
+    with (
+        patch(
+            PREFIX + "async_try_connect",
+            side_effect=RecoverableError("Token rejected", "invalid_auth"),
+        ),
+        patch.object(hass.config_entries, "async_reload", return_value=True),
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"ip_address": "2.3.4.5"}
+        )
+    assert result["reason"] == "reconfigure_successful"
+    assert entry.data["ip_address"] == "2.3.4.5"
+
+
+async def test_reconfigure_legacy_entry_without_token(hass):
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"ip_address": "1.2.3.4"},
+        unique_id=f"{DOMAIN}_HWE-P1_{DEVICE.serial}",
+    )
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "reconfigure", "entry_id": entry.entry_id}
+    )
+    with patch(
+        PREFIX + "async_try_connect",
+        side_effect=RecoverableError("Token missing", "invalid_auth"),
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"ip_address": "2.3.4.5"}
+        )
+    assert result["errors"] == {"base": "invalid_auth"}
+    assert entry.data["ip_address"] == "1.2.3.4"
+
+
+async def test_unexpected_errors(hass):
+    result = await start_pairing(hass)
+    with patch(PREFIX + "async_request_token", side_effect=KeyError("bug")):
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    assert result["errors"] == {"base": "unknown"}
+
+    entry = MockConfigEntry(
+        domain=DOMAIN, data=DATA, unique_id=f"{DOMAIN}_HWE-P1_{DEVICE.serial}"
+    )
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "reconfigure", "entry_id": entry.entry_id}
+    )
+    with patch(PREFIX + "async_try_connect", side_effect=KeyError("bug")):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"ip_address": "2.3.4.5"}
+        )
+    assert result["errors"] == {"base": "unknown"}
+
+
+async def test_wrong_address_returns_to_user_form(hass):
+    result = await start_pairing(hass)
+    with patch(
+        PREFIX + "async_request_token",
+        side_effect=RecoverableError("offline", "network_error"),
+    ):
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    assert result["step_id"] == "user"
+    with patch(PREFIX + "async_request_token", return_value=None) as request:
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"ip_address": "1.2.3.5"}
+        )
+    assert request.await_args.args[1] == "1.2.3.5"
     assert result["step_id"] == "authorize"

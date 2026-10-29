@@ -100,6 +100,7 @@ class MeterServer:
         app.router.add_get("/api/measurement", self._measurement)
         app.router.add_get("/api/system", self._system)
         app.router.add_post("/api/user", self._create_user)
+        app.router.add_delete("/api/user", self._delete_user)
         app.router.add_get("/api/ws", self._websocket)
         return app
 
@@ -141,6 +142,12 @@ class MeterServer:
         status, payload = self.meter.issue_token(name if isinstance(name, str) else "")
         LOGGER.info("pairing %s -> %s", name, status)
         return _json(payload, status=status)
+
+    async def _delete_user(self, request: web.Request) -> web.Response:
+        if not self.meter.delete_token(request.headers.get("Authorization")):
+            return _json({"error": "user:unauthorized"}, status=401)
+        LOGGER.info("deleted user on %s", self.meter.serial)
+        return web.Response(status=204)
 
     async def _websocket(self, request: web.Request) -> web.WebSocketResponse:
         socket = web.WebSocketResponse()

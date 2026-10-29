@@ -151,25 +151,15 @@ async def test_reconnect_resets_snapshots():
     await api.close()
 
 
-async def test_invalid_updates_keep_the_last_snapshot(caplog):
+async def test_unusable_frames_keep_the_last_snapshot(caplog):
     api, _, socket = client(initial())
     first = await api.connect()
     socket.receive.side_effect = [
         WSMessage(WSMsgType.TEXT, "{", None),
         WSMessage(WSMsgType.TEXT, "[]", None),
         frame("measurement", None),
-        frame("measurement", {"power_w": None}),
-        frame("measurement", {"power_w": "high"}),
-        frame("measurement", {"power_w": True}),
-        frame("measurement", {"power_w": 10**12, "frequency_hz": 5000}),
-        frame("measurement", {"external": "nope"}),
-        frame("measurement", {"external": [1]}),
-        frame("measurement", {"external": [{"value": "n/a"}], "frequency_hz": "slow"}),
-        frame("measurement", {"external": [{"value": 1.5}], "power_w": "high"}),
-        frame("measurement", {"external": [{"value": 10**15}]}),
-        frame("system", {"wifi_ssid": None, "uptime_s": 5}),
-        frame("system", {"wifi_rssi_db": 20}),
         frame("device", {"product_type": "HWE-P1"}),
+        frame("device", {**DEVICE, "serial": None}),
         frame("future_topic", {}),
         frame("measurement", {"power_w": 250, "energy_import_kwh": 10}),
     ]
@@ -182,8 +172,93 @@ async def test_invalid_updates_keep_the_last_snapshot(caplog):
     assert first.measurement.power_w == 100
     socket.close.assert_not_called()
     assert "Ignoring" in caplog.text
-    assert "wrong type" in caplog.text
-    assert "out-of-range" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("data", "expected"),
+    [
+        ({"power_w": None, "energy_import_kwh": 5}, {"power_w": None}),
+        ({"power_w": "high", "energy_import_kwh": 5}, {"power_w": None}),
+        ({"power_w": True, "energy_import_kwh": 5}, {"power_w": None}),
+        (
+            {"power_w": 10**12, "frequency_hz": 5000, "energy_import_kwh": 5},
+            {"power_w": None, "frequency_hz": None},
+        ),
+        ({"external": "nope", "energy_import_kwh": 5}, {"external_devices": {}}),
+    ],
+)
+async def test_bad_fields_only_drop_themselves(caplog, data, expected):
+    """One bad field must not freeze the other sensors or drop the stream."""
+    api, _, socket = client(initial())
+    await api.connect()
+    socket.receive.side_effect = [frame("measurement", data)]
+    with caplog.at_level("WARNING"):
+        updated = await api.receive()
+    assert updated.measurement.energy_import_kwh == 5
+    for key, value in expected.items():
+        assert (getattr(updated.measurement, key) or {}) == (value or {})
+    if any(value is not None for value in data.values() if value != 5):
+        assert "Ignoring invalid HomeWizard measurement fields" in caplog.text
+    socket.close.assert_not_called()
+
+
+async def test_persistent_null_field_keeps_the_stream():
+    frames = [
+        frame("measurement", {"power_w": 10 + n, "power_l2_w": None}) for n in range(40)
+    ]
+    api, _, socket = client(initial() + frames)
+    await api.connect()
+    for n in range(40):
+        assert (await api.receive()).measurement.power_w == 10 + n
+    socket.close.assert_not_called()
+
+
+async def test_bad_external_meters_are_dropped():
+    gas = {
+        "unique_id": "4730303031",
+        "type": "gas_meter",
+        "timestamp": "2026-10-29T12:00:00",
+        "value": 1.5,
+        "unit": "m3",
+    }
+    api, _, socket = client(initial())
+    await api.connect()
+    socket.receive.side_effect = [
+        frame(
+            "measurement",
+            {
+                "power_w": 5,
+                "external": [
+                    1,
+                    {**gas, "value": None},
+                    {**gas, "value": 10**15},
+                    {**gas, "unique_id": "5730303031", "value": 2.5},
+                ],
+            },
+        )
+    ]
+    updated = await api.receive()
+    assert updated.measurement.power_w == 5
+    assert [d.value for d in updated.measurement.external_devices.values()] == [2.5]
+
+
+async def test_last_measurement_tracks_measurements_only(monkeypatch):
+    import custom_components.homewizard_instant.websocket as module
+
+    from types import SimpleNamespace
+
+    clock = iter([50.0, 100.0, 200.0])
+    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: next(clock)))
+    api, _, socket = client(initial())
+    await api.connect()
+    assert api.last_measurement == 100.0
+    socket.receive.side_effect = [frame("system", {"uptime_s": 20})]
+    await api.receive()
+    assert api.last_measurement == 100.0
+    socket.receive.side_effect = [frame("measurement", {"power_w": 1})]
+    await api.receive()
+    assert api.last_measurement == 200.0
+    await api.close()
 
 
 @pytest.mark.parametrize(

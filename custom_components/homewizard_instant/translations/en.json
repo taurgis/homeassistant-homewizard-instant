@@ -4,17 +4,18 @@
       "already_configured": "Device is already configured",
       "device_not_supported": "This device is not supported. Only P1 meters are supported.",
       "invalid_discovery_parameters": "Invalid discovery parameters",
-      "reauth_enable_api_successful": "Enabling API was successful",
       "reconfigure_successful": "Reconfigure successful",
       "unknown_error": "Unexpected error",
-      "wrong_device": "The configured device is not the same found on this IP address.",
-      "reauth_successful": "Pairing successful"
+      "wrong_device": "The device at this IP address is not the configured P1 meter.",
+      "reauth_successful": "Pairing successful",
+      "unknown_device": "This device is not set up in HomeWizard Instant."
     },
     "error": {
       "network_error": "Device unreachable, make sure that you have entered the correct IP address and that the device is available in your network",
       "authorization_failed": "Press the device button and submit within 30 seconds.",
       "invalid_auth": "The token was rejected. Pair the device again.",
-      "unsupported_api_version": "This device requires firmware supporting API v2 and WebSockets."
+      "unsupported_api_version": "This device requires firmware supporting API v2 and WebSockets.",
+      "unknown": "Unexpected error. Check the Home Assistant logs for details."
     },
     "step": {
       "discovery_confirm": {
@@ -48,10 +49,10 @@
   },
   "exceptions": {
     "communication_error": {
-      "message": "Failed to communicate with the device. Check the IP address and network connectivity."
+      "message": "Failed to communicate with the device: {error}"
     },
-    "api_disabled": {
-      "message": "The local API is disabled. Enable it in the HomeWizard app and try again."
+    "stale_data": {
+      "message": "The P1 meter sent no measurements for {seconds} seconds. Check the cable between the P1 meter and the smart meter."
     }
   },
   "issues": {},

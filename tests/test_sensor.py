@@ -305,6 +305,8 @@ async def test_uptime_does_not_drift_on_measurement_push(
     )
     initial = sensor.native_value
     freezer.tick(timedelta(minutes=10))
+    coordinator.data = replace(mock_combined_data)  # measurement push, same system
+    sensor._refresh_uptime()
     assert sensor.available is True
     assert sensor.native_value == initial
     coordinator.data.system.uptime_s = None
@@ -312,4 +314,65 @@ async def test_uptime_does_not_drift_on_measurement_push(
     coordinator.data = replace(
         mock_combined_data, system=replace(mock_combined_data.system, uptime_s=1)
     )
+    sensor._refresh_uptime()
+    assert sensor.native_value > initial
+
+
+async def test_sensors_that_appear_later_are_added(
+    hass, mock_config_entry, mock_combined_data
+):
+    """Fields and meters missing from the first snapshot get entities later."""
+    from dataclasses import replace
+
+    from tests.conftest import FakeExternalDevice
+    from homewizard_energy.models import ExternalDevice
+
+    mock_config_entry.add_to_hass(hass)
+    coordinator = HWEnergyDeviceUpdateCoordinator(
+        hass, mock_config_entry, api=AsyncMock()
+    )
+    coordinator.async_set_updated_data(mock_combined_data)
+    mock_config_entry.runtime_data = coordinator
+    added = []
+    await async_setup_entry(hass, mock_config_entry, added.extend)
+    initial = len(added)
+    assert not any(e.entity_description.key == "active_voltage_v" for e in added)
+
+    measurement = replace(
+        mock_combined_data.measurement,
+        voltage_v=230.0,
+        external_devices={
+            **mock_combined_data.measurement.external_devices,
+            "water1": FakeExternalDevice(
+                type=ExternalDevice.DeviceType.WATER_METER, unit="m3", value=3.0
+            ),
+        },
+    )
+    coordinator.async_set_updated_data(replace(mock_combined_data, measurement=measurement))
+    new = added[initial:]
+    assert [e.entity_description.key for e in new] == ["active_voltage_v", "water_meter"]
+
+    # A repeated push does not create duplicates.
+    coordinator.async_set_updated_data(replace(mock_combined_data, measurement=measurement))
+    assert len(added) == initial + 2
+
+
+async def test_uptime_refreshes_on_coordinator_update(
+    hass, mock_config_entry, mock_combined_data
+):
+    from dataclasses import replace
+    from unittest.mock import patch
+
+    coordinator = HWEnergyDeviceUpdateCoordinator(hass, mock_config_entry, AsyncMock())
+    coordinator.data = mock_combined_data
+    sensor = HomeWizardSensorEntity(
+        coordinator, next(item for item in SENSORS if item.key == "uptime")
+    )
+    initial = sensor.native_value
+    coordinator.data = replace(
+        mock_combined_data, system=replace(mock_combined_data.system, uptime_s=1)
+    )
+    with patch.object(sensor, "async_write_ha_state") as write:
+        sensor._handle_coordinator_update()
+    write.assert_called_once()
     assert sensor.native_value > initial

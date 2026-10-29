@@ -1,4 +1,4 @@
-"""Diagnostics support for P1 Monitor."""
+"""Diagnostics support for HomeWizard Instant."""
 
 from __future__ import annotations
 
@@ -71,11 +71,21 @@ def _serialize_data(data: Any) -> dict[str, Any]:
     return _as_dict(data)
 
 
+def _without_meter_ids(data: dict[str, Any]) -> dict[str, Any]:
+    """List external meters without the dict keys, which embed meter serials."""
+    measurement = data.get("measurement")
+    if isinstance(measurement, dict) and isinstance(
+        external := measurement.get("external_devices"), dict
+    ):
+        measurement["external_devices"] = list(external.values())
+    return data
+
+
 async def async_get_config_entry_diagnostics(
     hass: HomeAssistant, entry: HomeWizardConfigEntry
 ) -> dict[str, Any]:
     """Return diagnostics for a config entry."""
-    data = entry.runtime_data.data
+    coordinator = entry.runtime_data
 
     return async_redact_data(
         {
@@ -85,7 +95,15 @@ async def async_get_config_entry_diagnostics(
                 "title": entry.title,
                 "unique_id": entry.unique_id,
             },
-            "data": _serialize_data(data),
+            "connection": {
+                "last_update_success": coordinator.last_update_success,
+                "last_exception": (
+                    repr(coordinator.last_exception)
+                    if coordinator.last_exception is not None
+                    else None
+                ),
+            },
+            "data": _without_meter_ids(_serialize_data(coordinator.data)),
         },
         TO_REDACT,
     )

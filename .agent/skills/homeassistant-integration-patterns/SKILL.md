@@ -21,11 +21,12 @@ This skill helps you make correct, repo-consistent changes to this Home Assistan
 |---|---|
 | Setup / teardown / coordinator wiring | `custom_components/homewizard_instant/__init__.py` |
 | Config flow (user, zeroconf, dhcp, reauth, reconfigure) | `custom_components/homewizard_instant/config_flow.py` |
-| Central polling + API-disabled handling | `custom_components/homewizard_instant/coordinator.py` |
+| WebSocket reader, reconnect backoff, stale watchdog | `custom_components/homewizard_instant/coordinator.py` |
+| WebSocket transport and frame validation | `custom_components/homewizard_instant/websocket.py` |
 | Sensors + external meters | `custom_components/homewizard_instant/sensor.py` |
 | Base entity / device registry identifiers | `custom_components/homewizard_instant/entity.py` |
 | Diagnostics redaction | `custom_components/homewizard_instant/diagnostics.py` |
-| Constants (including 1s interval) | `custom_components/homewizard_instant/const.py` |
+| Constants (including `STALE_AFTER`) | `custom_components/homewizard_instant/const.py` |
 | Text / translations | `custom_components/homewizard_instant/strings.json`, `custom_components/homewizard_instant/translations/en.json` |
 
 ## Core Rules
@@ -33,41 +34,34 @@ This skill helps you make correct, repo-consistent changes to this Home Assistan
 1. **Coordinator-only I/O**
    - Never add per-entity API calls.
    - Read everything from `HWEnergyDeviceUpdateCoordinator.data`.
-   - Keep a single shared poll cycle (`UPDATE_INTERVAL = timedelta(seconds=1)`).
+   - One WebSocket per entry; updates are pushed (`update_interval` stays `None`).
    - Keep `PARALLEL_UPDATES = 1` in `sensor.py`.
 
 2. **Async-only**
    - Only do async I/O; never block the event loop.
-   - Use `async_get_clientsession(hass)` and pass it into `HomeWizardEnergyV1`.
-   - Do not create ad-hoc aiohttp sessions per call.
+   - Use `async_get_clientsession(hass)` for both `HomeWizardEnergyV2` and the WebSocket.
+   - Build SSL contexts in the executor (`create_ssl_context`).
 
 ### Coordinator Error Handling
 ```python
-async def _async_update_data(self):
-    try:
-        return await self.api.combined()
-    except RequestError as err:
-        raise UpdateFailed(
-            err,
-            translation_domain=DOMAIN,
-            translation_key="communication_error",
-        ) from err
-    except DisabledError as err:
-        raise UpdateFailed(
-            err,
-            translation_domain=DOMAIN,
-            translation_key="api_disabled",
-        ) from err
+except UnauthorizedError:
+    # setup: raise ConfigEntryAuthFailed; reader: async_start_reauth
+except CONNECTION_ERRORS as err:
+    raise UpdateFailed(
+        translation_domain=DOMAIN,
+        translation_key="communication_error",
+        translation_placeholders={"error": str(err)},
+    ) from err
 ```
+Log a lost connection once (warning), retries at debug, and recovery once (info).
 
 3. **Avoid unavailable clutter**
-   - Only create entities when `has_fn(data)` is true in `SENSORS`.
+   - Create entities only when `has_fn(data)` is true; the platform listener adds sensors whose data appears later.
    - For external devices, only create entities when `measurement.external_devices` has a supported type.
 
-4. **Use API-disabled recovery path as designed**
-   - `DisabledError` in the coordinator is expected behavior when local API is disabled.
-   - Keep issue creation (`local_api_disabled`) and config entry reload behavior intact.
-   - Reauth flow (`reauth_enable_api`) should guide users to re-enable local API.
+4. **Token recovery**
+   - Legacy entries without a token raise `ConfigEntryAuthFailed`, which starts pairing through reauth.
+   - A token rejected at runtime starts reauth; the entry keeps its unique ID and entity IDs.
 
 5. **Stable identifiers**
    - Config entry unique ID: `f"{DOMAIN}_{product_type}_{serial}"`.
@@ -153,7 +147,7 @@ Create `icons.json`:
 ## Common pitfalls
 
 - Adding per-entity network requests instead of using coordinator data.
-- Removing the 1-second poll interval (`const.py`) without explicit product direction.
+- Adding REST polling next to the WebSocket, or lowering `STALE_AFTER` below a 10 s meter interval.
 - Increasing request parallelism above `PARALLEL_UPDATES = 1`.
 - Breaking unique IDs or dropping `DOMAIN`-prefixed device identifiers.
 - Editing only `translations/en.json` without keeping `strings.json` aligned.

@@ -52,4 +52,26 @@ async def test_unload(hass, mock_config_entry, success):
         hass.config_entries, "async_unload_platforms", return_value=success
     ):
         assert await async_unload_entry(hass, mock_config_entry) == success
-    assert coordinator.async_stop.await_count == int(success)
+    # The reader stops through the entry's unload callback, not twice.
+    coordinator.async_stop.assert_not_awaited()
+
+
+@pytest.mark.parametrize("token", [None, "secret"])
+async def test_remove_revokes_token(hass, mock_config_entry, token):
+    from custom_components.homewizard_instant import async_remove_entry
+
+    data = {"ip_address": "1.2.3.4", "product_type": "HWE-P1", "serial": "aabbccddeeff"}
+    if token:
+        data["token"] = token
+    mock_config_entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(mock_config_entry, data=data)
+    with patch(
+        "custom_components.homewizard_instant.async_revoke_token"
+    ) as revoke:
+        await async_remove_entry(hass, mock_config_entry)
+    if token:
+        revoke.assert_awaited_once_with(
+            hass, "1.2.3.4", token, product_type="HWE-P1", serial="aabbccddeeff"
+        )
+    else:
+        revoke.assert_not_called()

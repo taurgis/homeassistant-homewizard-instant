@@ -2,19 +2,19 @@
 
 This repository contains a Home Assistant custom integration for **HomeWizard P1 meters**.
 
-The project’s primary differentiator is **near real-time polling**: it refreshes device data every **1 second**.
+The project’s primary differentiator is **real-time push updates**: every measurement the meter sends over the authenticated **API v2 WebSocket** reaches Home Assistant, without a polling interval.
 
 ## What this integration is (and is not)
 
 - **Domain**: `homewizard_instant` (intentionally different from the official `homewizard` integration).
 - **Scope**: Only **P1 meters** are supported.
-- **Transport**: HomeWizard local API (API v1 via `python-homewizard-energy`).
-- **Pattern**: `local_polling` using a single `DataUpdateCoordinator`.
+- **Transport**: HomeWizard local API v2. One TLS-verified `wss://<host>/api/ws` connection per entry (`websocket.py`); REST through `HomeWizardEnergyV2` only for pairing, identity checks and token revocation.
+- **Pattern**: `local_push` using a single `DataUpdateCoordinator` fed by a background reader task.
 
 ## Architectural constraints you must respect
 
-### 1) Keep polling centralized
-- Do **not** add per-entity polling.
+### 1) Keep updates centralized
+- Do **not** add per-entity polling or REST polling next to the WebSocket.
 - All entities must read from `HWEnergyDeviceUpdateCoordinator.data`.
 - `PARALLEL_UPDATES = 1` is intentional to avoid stressing the device.
 
@@ -25,13 +25,16 @@ The project’s primary differentiator is **near real-time polling**: it refresh
 
 ### 3) Device resource limits
 HomeWizard P1 hardware has limited connection and throughput headroom.
-- Avoid concurrent requests.
-- Prefer one request per update cycle.
-- Be careful when adding new API calls; if you need additional data, try to source it from `api.combined()` first.
+- Keep one WebSocket per entry; avoid concurrent requests.
+- If you need additional data, check the `device`, `measurement` and `system` topics first.
 
-### 4) API-disabled handling (403/Disabled)
-This integration explicitly supports a “Local API disabled” recovery path.
-- `DisabledError` triggers a config entry reload and starts re-auth to guide the user to re-enable the API.
+### 4) Token and connection handling
+- Entries without a v2 token raise `ConfigEntryAuthFailed`; pairing happens through reauth (physical button press).
+- A token rejected at runtime starts reauth.
+- Connection loss: entities unavailable, reconnect with 1-60 s backoff. Log once when the connection drops, once when it recovers, and retries at debug.
+- Unexpected exceptions in the reader are logged once with a traceback and then reconnect; the reader must not die silently.
+- A silent meter (no measurement for `STALE_AFTER`) marks entities unavailable until measurements resume.
+- Invalid or null fields drop only that field; do not reject a whole snapshot for one bad value.
 - Do not turn expected connectivity failures into noisy stack traces.
 
 ### 5) Home Assistant integration contract
@@ -52,9 +55,10 @@ This integration explicitly supports a “Local API disabled” recovery path.
 
 | Concern | File | Notes |
 |---|---|---|
-| Setup / teardown | `custom_components/homewizard_instant/__init__.py` | Builds `HomeWizardEnergyV1`, creates coordinator, forwards platforms |
+| Setup / teardown | `custom_components/homewizard_instant/__init__.py` | Builds `HomeWizardWebSocket`, creates coordinator, forwards platforms, revokes the token on removal |
 | Config flow | `custom_components/homewizard_instant/config_flow.py` | User input, zeroconf, dhcp, reauth, reconfigure |
-| Polling + error handling | `custom_components/homewizard_instant/coordinator.py` | Single source of truth; raises `UpdateFailed` with translation keys |
+| Push loop + error handling | `custom_components/homewizard_instant/coordinator.py` | Single source of truth; reconnect backoff, stale watchdog, `UpdateFailed` with translation keys |
+| WebSocket transport | `custom_components/homewizard_instant/websocket.py` | Handshake, subscriptions, TLS, per-field validation |
 | Entities | `custom_components/homewizard_instant/sensor.py` | Uses descriptions + `has_fn` to avoid creating invalid entities |
 | Base entity & device registry | `custom_components/homewizard_instant/entity.py` | Uses DOMAIN-prefixed identifiers to avoid collisions |
 | Diagnostics | `custom_components/homewizard_instant/diagnostics.py` | Redacts IP/serial/token/etc |
@@ -83,10 +87,10 @@ External devices (gas/water/heat meters):
 - This integration does not register services or actions.
 - Keep it that way unless explicitly requested; add idempotent registration if services are introduced.
 
-## Polling interval
+## Update rate
 
-- The update interval is hard-coded in `custom_components/homewizard_instant/const.py` as `UPDATE_INTERVAL = timedelta(seconds=1)`.
-- Changes to this value alter the core purpose of this repository; only adjust if explicitly requested.
+- There is no polling interval; the meter pushes measurements (1 s for DSMR 5, 10 s for older meters).
+- `STALE_AFTER` in `const.py` (60 s) decides when a silent meter makes entities unavailable. Keep it well above the slowest meter interval; only change it if explicitly requested.
 
 ## Quality and style expectations
 
@@ -96,7 +100,7 @@ External devices (gas/water/heat meters):
 
 ## Local development
 
-- Use the VS Code task "Start Home Assistant" to run a dev instance.
+- `docs/development.md` describes the Docker lab: Home Assistant plus emulated API v2 meters with fault injection.
 - On macOS shells, use `python3` for Python commands; `python` may resolve to Python 2.7 or be missing.
 - Prefer `python3 -m pip ...` over bare `pip`/`pip3` so installs target the same interpreter used for tests.
 - When troubleshooting, check Home Assistant logs for `homewizard_instant` messages.

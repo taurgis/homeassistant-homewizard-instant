@@ -6,6 +6,7 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homewizard_energy.models import get_verification_hostname
 
+from .config_flow import async_revoke_token
 from .const import CONF_PRODUCT_TYPE, CONF_SERIAL, PLATFORMS
 from .coordinator import HomeWizardConfigEntry, HWEnergyDeviceUpdateCoordinator
 from .websocket import HomeWizardWebSocket, create_ssl_context
@@ -40,8 +41,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomeWizardConfigEntry) -
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: HomeWizardConfigEntry) -> bool:
-    """Stop the reader only when platforms have successfully unloaded."""
-    if await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
-        await entry.runtime_data.async_stop()
-        return True
-    return False
+    """Unload platforms; the reader stops through the unload callback."""
+    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: HomeWizardConfigEntry) -> None:
+    """Revoke the pairing token so it does not linger on the meter."""
+    if token := entry.data.get(CONF_TOKEN):
+        await async_revoke_token(
+            hass,
+            entry.data[CONF_IP_ADDRESS],
+            token,
+            product_type=entry.data.get(CONF_PRODUCT_TYPE),
+            serial=entry.data.get(CONF_SERIAL),
+        )

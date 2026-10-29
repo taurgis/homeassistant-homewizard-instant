@@ -133,6 +133,15 @@ class Meter:
             return False
         return header.removeprefix("Bearer ").strip() in self.tokens
 
+    def delete_token(self, header: str | None) -> bool:
+        """Remove the caller's own user, like DELETE /api/user without a name."""
+        if not self.authorized(header):
+            return False
+        assert header is not None
+        del self.tokens[header.removeprefix("Bearer ").strip()]
+        self._save_tokens()
+        return True
+
     def revoke(self) -> None:
         self.faults.revoked = True
         self.tokens.clear()

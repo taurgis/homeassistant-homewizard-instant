@@ -48,7 +48,7 @@ else:
 
 from .const import DOMAIN
 from .coordinator import HomeWizardConfigEntry, HWEnergyDeviceUpdateCoordinator
-from .entity import HomeWizardEntity
+from .entity import HomeWizardEntity, p1_device_info
 
 SENSOR_DEVICE_CLASS_UNITS = cast(
     "dict[SensorDeviceClass, set[str]]",
@@ -682,73 +682,47 @@ async def async_setup_entry(
     entry: HomeWizardConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Initialize sensors."""
-
-    # Initialize default sensors
-    entities: list[SensorEntity] = [
-        HomeWizardSensorEntity(entry.runtime_data, description)
-        for description in SENSORS
-        if description.has_fn(entry.runtime_data.data)
-    ]
-
-    # Initialize external devices (gas meters, water meters connected to P1)
-    p1 = entry.runtime_data.data.device
+    """Initialize sensors and add those whose data appears later."""
+    coordinator = entry.runtime_data
+    p1 = coordinator.data.device
     parent = None
     if p1.serial is not None:
+        # External meters link to the P1 by registry id, so it must exist first.
         parent = dr.async_get(hass).async_get_or_create(
-            config_entry_id=entry.entry_id,
-            identifiers={(DOMAIN, f"{DOMAIN}_{p1.serial}")},
-            manufacturer="HomeWizard",
-            model=f"{p1.model_name or p1.product_type} (Instant)",
-            model_id=p1.product_type,
-            sw_version=p1.firmware_version,
-            serial_number=p1.serial,
+            config_entry_id=entry.entry_id, **p1_device_info(p1)
         )
+    parent_id = parent.id if parent is not None else None
+    known_sensors: set[str] = set()
     known_external: set[str] = set()
-    measurement = entry.runtime_data.data.measurement
-    if measurement.external_devices is not None:
-        for unique_id, device in measurement.external_devices.items():
-            if device.type is not None and (
-                description := EXTERNAL_SENSORS.get(device.type)
-            ):
-                known_external.add(unique_id)
-                # Add external device
-                entities.append(
-                    HomeWizardExternalSensorEntity(
-                        entry.runtime_data,
-                        description,
-                        unique_id,
-                        parent.id if parent is not None else None,
-                    )
-                )
 
     @callback
-    def _add_external_meters() -> None:
-        """Create entities for utility meters that appear after setup."""
-        current = entry.runtime_data.data.measurement.external_devices
-        if not current:
-            return
+    def _new_entities() -> list[SensorEntity]:
+        data = coordinator.data
         fresh: list[SensorEntity] = []
-        for unique_id, device in current.items():
+        for description in SENSORS:
+            if description.key not in known_sensors and description.has_fn(data):
+                known_sensors.add(description.key)
+                fresh.append(HomeWizardSensorEntity(coordinator, description))
+        for unique_id, device in (data.measurement.external_devices or {}).items():
             if unique_id in known_external or device.type is None:
                 continue
-            known_external.add(unique_id)
-            if description := EXTERNAL_SENSORS.get(device.type):
+            if external := EXTERNAL_SENSORS.get(device.type):
+                known_external.add(unique_id)
                 fresh.append(
                     HomeWizardExternalSensorEntity(
-                        entry.runtime_data,
-                        description,
-                        unique_id,
-                        parent.id if parent is not None else None,
+                        coordinator, external, unique_id, parent_id
                     )
                 )
-        if fresh:
+        return fresh
+
+    @callback
+    def _add_new_entities() -> None:
+        """Create entities for fields and meters that appear after setup."""
+        if coordinator.last_update_success and (fresh := _new_entities()):
             async_add_entities(fresh)
 
-    entry.async_on_unload(
-        entry.runtime_data.async_add_listener(_add_external_meters)
-    )
-    async_add_entities(entities)
+    entry.async_on_unload(coordinator.async_add_listener(_add_new_entities))
+    async_add_entities(_new_entities())
 
 
 class HomeWizardSensorEntity(HomeWizardEntity, SensorEntity):
@@ -773,24 +747,36 @@ class HomeWizardSensorEntity(HomeWizardEntity, SensorEntity):
         if not description.enabled_fn(self.coordinator.data):
             self._attr_entity_registry_enabled_default = False
 
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Refresh the cached boot time before writing state."""
+        if self.entity_description.key == "uptime":
+            self._refresh_uptime()
+        super()._handle_coordinator_update()
+
+    def _refresh_uptime(self) -> None:
+        """Recompute boot time only when a new system snapshot arrives.
+
+        Measurement pushes reuse the system snapshot. Its uptime must not be
+        interpreted relative to a later wall clock on every push, and small
+        drifts inside a five-minute window keep the previous boot time.
+        """
+        if self.coordinator.data.system is self._uptime_system:
+            return
+        self._uptime_system = self.coordinator.data.system
+        computed = self.entity_description.value_fn(self.coordinator.data)
+        if (
+            isinstance(computed, datetime)
+            and isinstance(self._uptime_value, datetime)
+            and abs(computed - self._uptime_value) < _UPTIME_VARIANCE
+        ):
+            return
+        self._uptime_value = computed
+
     @property
     def native_value(self) -> StateType | datetime | None:
         """Return the sensor value."""
         if self.entity_description.key == "uptime":
-            # Measurement pushes reuse the system snapshot. Its uptime must not
-            # be interpreted relative to a later wall clock on every push.
-            # The five-minute window is stored on the entity. A process-wide
-            # cache would make a second meter inherit the first meter's boot time.
-            if self.coordinator.data.system is not self._uptime_system:
-                self._uptime_system = self.coordinator.data.system
-                computed = self.entity_description.value_fn(self.coordinator.data)
-                if (
-                    isinstance(computed, datetime)
-                    and isinstance(self._uptime_value, datetime)
-                    and abs(computed - self._uptime_value) < _UPTIME_VARIANCE
-                ):
-                    return self._uptime_value
-                self._uptime_value = computed
             return self._uptime_value
         return self.entity_description.value_fn(self.coordinator.data)
 
@@ -799,8 +785,6 @@ class HomeWizardSensorEntity(HomeWizardEntity, SensorEntity):
         """Return availability of meter."""
         if not super().available:
             return False
-        # Uptime's native value caches the boot time. Availability checks must
-        # not run that update, or a clock tick during the check moves it.
         if self.entity_description.key == "uptime":
             system = self.coordinator.data.system
             return system is not None and system.uptime_s is not None

@@ -7,17 +7,21 @@ from typing import Any
 
 import voluptuous as vol
 from aiohttp import ClientSession
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import SOURCE_USER, ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_IP_ADDRESS, CONF_TOKEN
 from homeassistant.core import HomeAssistant
+from homeassistant.data_entry_flow import AbortFlow
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import instance_id
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import TextSelector
+from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
+from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 from homewizard_energy import HomeWizardEnergyV2
 from homewizard_energy.const import Model
 from homewizard_energy.errors import (
     DisabledError,
+    HomeWizardEnergyException,
     NotFoundError,
     RequestError,
     UnauthorizedError,
@@ -25,7 +29,7 @@ from homewizard_energy.errors import (
 )
 from homewizard_energy.models import Device, get_verification_hostname
 
-from .const import CONF_PRODUCT_NAME, CONF_PRODUCT_TYPE, CONF_SERIAL, DOMAIN
+from .const import CONF_PRODUCT_NAME, CONF_PRODUCT_TYPE, CONF_SERIAL, DOMAIN, LOGGER
 from .websocket import trust_development_ca
 
 
@@ -79,15 +83,23 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Collect the host, then open the device's pairing window."""
         if user_input is not None:
+            self._async_abort_entries_match(
+                {CONF_IP_ADDRESS: user_input[CONF_IP_ADDRESS]}
+            )
+            if user_input[CONF_IP_ADDRESS] != self.ip_address:
+                self._token = None
             self.ip_address = user_input[CONF_IP_ADDRESS]
             return await self.async_step_authorize()
+        return self._show_user_form()
+
+    def _show_user_form(self, errors: dict[str, str] | None = None) -> ConfigFlowResult:
         return self.async_show_form(
             step_id="user",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_IP_ADDRESS): TextSelector(),
-                }
+            data_schema=self.add_suggested_values_to_schema(
+                vol.Schema({vol.Required(CONF_IP_ADDRESS): TextSelector()}),
+                {CONF_IP_ADDRESS: self.ip_address} if self.ip_address else {},
             ),
+            errors=errors,
         )
 
     async def async_step_authorize(
@@ -144,13 +156,26 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
             errors["base"] = err.error_code
             if err.error_code == "invalid_auth":
                 self._token = None
+            # A wrong address cannot be fixed on the pairing form.
+            if self.source == SOURCE_USER and err.error_code in (
+                "network_error",
+                "unsupported_api_version",
+            ):
+                return self._show_user_form(errors)
+        except AbortFlow:
+            raise
+        except Exception:  # noqa: BLE001
+            LOGGER.exception("Unexpected error while pairing the HomeWizard meter")
+            errors["base"] = "unknown"
         return self.async_show_form(
             step_id="authorize",
             errors=errors,
             description_placeholders={CONF_IP_ADDRESS: self.ip_address},
         )
 
-    async def async_step_zeroconf(self, discovery_info: Any) -> ConfigFlowResult:
+    async def async_step_zeroconf(
+        self, discovery_info: ZeroconfServiceInfo
+    ) -> ConfigFlowResult:
         """Discover supported P1 meters and update existing hosts."""
         properties = discovery_info.properties
         if not all(
@@ -184,7 +209,9 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
             },
         )
 
-    async def async_step_dhcp(self, discovery_info: Any) -> ConfigFlowResult:
+    async def async_step_dhcp(
+        self, discovery_info: DhcpServiceInfo
+    ) -> ConfigFlowResult:
         """Update a known meter's IP without making unauthenticated v1 requests."""
         serial = discovery_info.macaddress.replace(":", "").replace("-", "").lower()
         for entry in self._async_current_entries():
@@ -194,7 +221,7 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
                 self._abort_if_unique_id_configured(
                     updates={CONF_IP_ADDRESS: discovery_info.ip}
                 )
-        return self.async_abort(reason="unknown_error")
+        return self.async_abort(reason="unknown_device")
 
     async def async_step_reauth(
         self, entry_data: Mapping[str, Any]
@@ -230,7 +257,20 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
                     serial=serial,
                 )
             except RecoverableError as err:
+                if (
+                    err.error_code == "invalid_auth"
+                    and entry.data.get(CONF_TOKEN)
+                    and verification_hostname(product_type, serial) is not None
+                ):
+                    # The 401 came over TLS pinned to this meter's identity, so
+                    # the address is right. Reloading starts reauthentication.
+                    return self.async_update_reload_and_abort(
+                        entry, data_updates=user_input
+                    )
                 errors["base"] = err.error_code
+            except Exception:  # noqa: BLE001
+                LOGGER.exception("Unexpected error while reconfiguring HomeWizard")
+                errors["base"] = "unknown"
             else:
                 await self.async_set_unique_id(
                     f"{DOMAIN}_{device.product_type}_{device.serial}"
@@ -276,7 +316,7 @@ async def async_try_connect(
         raise RecoverableError("Token rejected", "invalid_auth") from err
     except (NotFoundError, UnsupportedError) as err:
         raise RecoverableError("API v2 required", "unsupported_api_version") from err
-    except (RequestError, DisabledError) as err:
+    except RequestError as err:
         raise RecoverableError("Cannot connect", "network_error") from err
     finally:
         await api.close()
@@ -307,6 +347,36 @@ async def async_request_token(
         raise RecoverableError("API v2 required", "unsupported_api_version") from err
     except RequestError as err:
         raise RecoverableError("Cannot connect", "network_error") from err
+    finally:
+        await api.close()
+
+
+async def async_revoke_token(
+    hass: HomeAssistant,
+    ip_address: str,
+    token: str,
+    *,
+    product_type: str | None = None,
+    serial: str | None = None,
+) -> None:
+    """Delete this integration's local user from the meter, best effort."""
+    await hass.async_add_executor_job(trust_development_ca)
+    api = HomeWizardEnergyV2(
+        ip_address,
+        identifier=verification_hostname(product_type, serial),
+        token=token,
+        clientsession=async_get_clientsession(hass),
+        timeout=5,
+    )
+    try:
+        await api.delete_token()
+    except (HomeWizardEnergyException, ValueError) as err:
+        LOGGER.info(
+            "Could not remove the Home Assistant user from the HomeWizard meter at "
+            "%s (%s); remove it in the HomeWizard Energy app if needed",
+            ip_address,
+            str(err) or type(err).__name__,
+        )
     finally:
         await api.close()
 

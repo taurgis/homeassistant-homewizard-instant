@@ -98,18 +98,6 @@ _TOPIC_RANGES = {
 }
 _WARNING_INTERVAL = 60.0
 _INVALID_LIMIT = 30
-_last_warning: dict[str, float] = {}
-
-
-def _warn(key: str, message: str, *args: object) -> None:
-    """Log a repeated socket fault once a minute instead of once a frame."""
-    now = time.monotonic()
-    previous = _last_warning.get(key)
-    if previous is not None and now - previous < _WARNING_INTERVAL:
-        LOGGER.debug(message, *args)
-        return
-    _last_warning[key] = now
-    LOGGER.warning(message, *args)
 
 
 def _certificate_bundle(text: str) -> str | None:
@@ -179,40 +167,57 @@ def create_ssl_context() -> ssl.SSLContext:
     return context
 
 
-def _contains_null(value: Any) -> bool:
-    if value is None:
-        return True
-    if isinstance(value, dict):
-        return any(_contains_null(item) for item in value.values())
-    if isinstance(value, list):
-        return any(_contains_null(item) for item in value)
-    return False
-
-
-def _range_problem(topic: str, data: dict[str, Any]) -> str | None:
-    ranges = _TOPIC_RANGES[topic]
-    for key, value in data.items():
-        if key == "external":
-            if not isinstance(value, list):
-                return "external is not a list"
-            for item in value:
-                if not isinstance(item, dict):
-                    return "external entry is not an object"
-                reading = item.get("value")
-                if isinstance(reading, bool) or not isinstance(reading, (int, float)):
-                    continue
-                if reading < 0 or reading > 1_000_000_000_000:
-                    return f"external value {reading} is out of range"
-            continue
-        bounds = ranges.get(key)
-        if bounds is None:
-            continue
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            return f"{key} is {type(value).__name__}, expected a number"
-        low, high = bounds
-        if value < low or value > high:
-            return f"{key}={value} outside {low}..{high}"
+def _number_problem(key: str, value: Any, bounds: tuple[float, float]) -> str | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return f"{key} is {type(value).__name__}, expected a number"
+    low, high = bounds
+    if value < low or value > high:
+        return f"{key}={value} outside {low}..{high}"
     return None
+
+
+def _external_problem(item: Any) -> str | None:
+    if not isinstance(item, dict):
+        return "external entry is not an object"
+    reading = item.get("value")
+    if isinstance(reading, bool) or not isinstance(reading, (int, float)):
+        return f"external value {reading!r} is not a number"
+    if reading < 0 or reading > 1_000_000_000_000:
+        return f"external value {reading} is out of range"
+    return None
+
+
+def _sanitize(topic: str, data: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Drop only the fields that fail validation.
+
+    Every field in the library models is optional, so a dropped or null field
+    makes one sensor unavailable instead of freezing the whole snapshot.
+    """
+    ranges = _TOPIC_RANGES[topic]
+    clean: dict[str, Any] = {}
+    problems: list[str] = []
+    for key, value in data.items():
+        if value is None:
+            continue
+        if key == "external" and topic == "measurement":
+            if not isinstance(value, list):
+                problems.append("external is not a list")
+                continue
+            kept = []
+            for item in value:
+                if problem := _external_problem(item):
+                    problems.append(problem)
+                else:
+                    kept.append(item)
+            clean[key] = kept
+            continue
+        if (bounds := ranges.get(key)) is not None and (
+            problem := _number_problem(key, value, bounds)
+        ):
+            problems.append(problem)
+            continue
+        clean[key] = value
+    return clean, problems
 
 
 class HomeWizardWebSocket:
@@ -234,6 +239,8 @@ class HomeWizardWebSocket:
         self._socket: ClientWebSocketResponse | None = None
         self._topics: dict[str, Any] = {}
         self._invalid = 0
+        self._last_warning: dict[str, float] = {}
+        self.last_measurement = time.monotonic()
 
     async def connect(self) -> CombinedModels:
         """Authenticate and wait for every initial snapshot before becoming available."""
@@ -272,6 +279,16 @@ class HomeWizardWebSocket:
             await self.close()
             raise
 
+    def _warn(self, key: str, message: str, *args: object) -> None:
+        """Log a repeated socket fault once a minute instead of once a frame."""
+        now = time.monotonic()
+        previous = self._last_warning.get(key)
+        if previous is not None and now - previous < _WARNING_INTERVAL:
+            LOGGER.debug(message, *args)
+            return
+        self._last_warning[key] = now
+        LOGGER.warning(message, *args)
+
     async def _next_message(self) -> dict[str, Any]:
         """Return the next protocol message, skipping junk already logged."""
         while True:
@@ -287,7 +304,7 @@ class HomeWizardWebSocket:
         try:
             payload = message.json()
         except ValueError as err:
-            _warn(
+            self._warn(
                 "malformed",
                 "Ignoring malformed HomeWizard WebSocket message: %s",
                 err,
@@ -295,7 +312,7 @@ class HomeWizardWebSocket:
             self._reject_invalid()
             return None
         if not isinstance(payload, dict) or not isinstance(payload.get("type"), str):
-            _warn("shape", "Ignoring HomeWizard WebSocket message with unexpected shape")
+            self._warn("shape", "Ignoring HomeWizard WebSocket message with unexpected shape")
             self._reject_invalid()
             return None
         if payload["type"] == "error":
@@ -317,33 +334,31 @@ class HomeWizardWebSocket:
             return False
         data = message.get("data")
         if not isinstance(data, dict):
-            _warn("payload", "Ignoring HomeWizard %s message with invalid payload", topic)
+            self._warn("payload", "Ignoring HomeWizard %s message with invalid payload", topic)
             return self._reject_invalid()
-        if _contains_null(data):
-            _warn("null", "Ignoring HomeWizard %s message with null fields", topic)
-            return self._reject_invalid()
-        if problem := _range_problem(topic, data):
-            kind = "wrong type" if "expected a number" in problem else "out-of-range"
-            _warn(
-                f"range-{kind}",
-                "Ignoring %s HomeWizard %s value: %s",
-                kind,
+        data, problems = _sanitize(topic, data)
+        if problems:
+            self._warn(
+                f"fields-{topic}",
+                "Ignoring invalid HomeWizard %s fields: %s",
                 topic,
-                problem,
+                "; ".join(problems),
             )
-            return self._reject_invalid()
         try:
             if topic == "device":
                 device = Device.from_dict(data)
+                if not device.serial:
+                    raise ValueError("device message without serial")
                 if device.id != self._identifier:
                     raise RequestError("WebSocket device identity changed")
                 self._topics[topic] = device
             elif topic == "measurement":
                 self._topics[topic] = Measurement.from_dict(data)
+                self.last_measurement = time.monotonic()
             else:
                 self._topics[topic] = System.from_dict(data)
         except (MissingField, InvalidFieldValue, ValueError) as err:
-            _warn("invalid", "Ignoring invalid HomeWizard %s message: %s", topic, err)
+            self._warn("invalid", "Ignoring invalid HomeWizard %s message: %s", topic, err)
             return self._reject_invalid()
         self._invalid = 0
         return True
