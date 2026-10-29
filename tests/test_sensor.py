@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+import logging
+from unittest.mock import AsyncMock, patch
 
 from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.const import UnitOfVolume
+from homeassistant.helpers import device_registry as dr
+from homewizard_energy.models import ExternalDevice
 
+from custom_components.homewizard_instant.const import DOMAIN
 from custom_components.homewizard_instant.coordinator import (
     HWEnergyDeviceUpdateCoordinator,
 )
+from custom_components.homewizard_instant.entity import meter_identifier
 from custom_components.homewizard_instant.sensor import (
     HomeWizardExternalSensorEntity,
     HomeWizardSensorEntity,
@@ -161,6 +166,124 @@ async def test_external_sensor_missing_device_key(hass, mock_config_entry, mock_
     assert external.available is False
     assert external.native_unit_of_measurement is None
     assert external.device_class is None
+
+
+def _via_device_deprecations(records: list[logging.LogRecord]) -> list[str]:
+    """Return log messages that still mention the deprecated via device API."""
+    return [
+        record.getMessage()
+        for record in records
+        if "via_device" in record.getMessage().lower()
+        and "deprecat" in record.getMessage().lower()
+    ]
+
+
+async def test_external_meter_links_with_via_device_id(
+    hass, mock_config_entry, mock_combined_data, caplog
+):
+    """External meters link to the P1 meter by device id, without a deprecation."""
+    mock_config_entry.add_to_hass(hass)
+    external_cls = type(mock_combined_data.measurement.external_devices["gas123"])
+    mock_combined_data.measurement.external_devices["water456"] = external_cls(
+        type=ExternalDevice.DeviceType.WATER_METER,
+        unit="m3",
+        value=2.0,
+    )
+
+    mock_api = AsyncMock()
+    mock_api.combined = AsyncMock(return_value=mock_combined_data)
+    mock_api.close = AsyncMock()
+
+    caplog.set_level(logging.DEBUG)
+    with (
+        patch(
+            "custom_components.homewizard_instant.HomeWizardEnergyV1",
+            return_value=mock_api,
+        ),
+        patch(
+            "custom_components.homewizard_instant.async_get_clientsession",
+            return_value=AsyncMock(),
+        ),
+    ):
+        assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+    registry = dr.async_get(hass)
+    entry_id = mock_config_entry.entry_id
+    parent = registry.async_get_device_by_identifier(
+        meter_identifier(mock_combined_data.device.serial), entry_id
+    )
+    gas = registry.async_get_device_by_identifier(
+        (DOMAIN, f"{DOMAIN}_gas123"), entry_id
+    )
+    water = registry.async_get_device_by_identifier(
+        (DOMAIN, f"{DOMAIN}_water456"), entry_id
+    )
+
+    assert parent is not None
+    assert gas is not None
+    assert water is not None
+    assert gas.via_device_id == parent.id
+    assert water.via_device_id == parent.id
+    assert parent.via_device_id is None
+    assert _via_device_deprecations(caplog.records) == []
+
+
+async def test_external_sensor_device_info_uses_via_device_id(
+    hass, mock_config_entry, mock_combined_data, caplog
+):
+    """The external sensor device info stores via_device_id and not via_device."""
+    mock_config_entry.add_to_hass(hass)
+
+    coordinator = HWEnergyDeviceUpdateCoordinator(
+        hass, mock_config_entry, api=AsyncMock()
+    )
+    coordinator.data = mock_combined_data
+
+    from custom_components.homewizard_instant.sensor import EXTERNAL_SENSORS
+
+    description = EXTERNAL_SENSORS[
+        coordinator.data.measurement.external_devices["gas123"].type
+    ]
+
+    caplog.set_level(logging.DEBUG)
+    external = HomeWizardExternalSensorEntity(coordinator, description, "gas123")
+    device_info = external.device_info
+    assert device_info is not None
+
+    registry = dr.async_get(hass)
+    parent = registry.async_get_device_by_identifier(
+        meter_identifier(mock_combined_data.device.serial),
+        mock_config_entry.entry_id,
+    )
+    assert parent is not None
+    assert device_info["via_device_id"] == parent.id
+    assert "via_device" not in device_info
+    assert _via_device_deprecations(caplog.records) == []
+
+
+async def test_external_sensor_without_parent_serial(
+    hass, mock_config_entry, mock_combined_data
+):
+    """An external meter does not link when the P1 meter has no serial."""
+    mock_config_entry.add_to_hass(hass)
+    mock_combined_data.device.serial = None
+
+    coordinator = HWEnergyDeviceUpdateCoordinator(
+        hass, mock_config_entry, api=AsyncMock()
+    )
+    coordinator.data = mock_combined_data
+
+    from custom_components.homewizard_instant.sensor import EXTERNAL_SENSORS
+
+    description = EXTERNAL_SENSORS[
+        coordinator.data.measurement.external_devices["gas123"].type
+    ]
+    external = HomeWizardExternalSensorEntity(coordinator, description, "gas123")
+    device_info = external.device_info
+    assert device_info is not None
+    assert "via_device_id" not in device_info
+    assert "via_device" not in device_info
 
 
 async def test_import_tariff_t1_sensor_does_not_depend_on_export_t2(

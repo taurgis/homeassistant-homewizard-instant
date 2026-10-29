@@ -2,6 +2,8 @@
 
 This is a custom integration for **HomeWizard P1 meters** that refreshes data every **1 second**.
 
+Requires Home Assistant 2026.8.0 or newer.
+
 Home Assistant’s official HomeWizard integration is documented here:
 - https://www.home-assistant.io/integrations/homewizard/
 
