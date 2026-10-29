@@ -5,17 +5,15 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Final, TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Final, cast
 
-from homewizard_energy.models import CombinedModels, ExternalDevice
-
-from homeassistant.components import sensor as sensor_platform
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
     SensorEntityDescription,
     SensorStateClass,
 )
+from homeassistant.components.sensor.const import DEVICE_CLASS_UNITS
 from homeassistant.const import (
     ATTR_VIA_DEVICE,
     PERCENTAGE,
@@ -35,6 +33,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.typing import StateType
 from homeassistant.util.dt import utcnow
 from homeassistant.util.variance import ignore_variance
+from homewizard_energy.models import CombinedModels, ExternalDevice, System
 
 if TYPE_CHECKING:
     from homeassistant.helpers.entity_platform import (
@@ -54,7 +53,7 @@ from .entity import HomeWizardEntity
 
 SENSOR_DEVICE_CLASS_UNITS = cast(
     "dict[SensorDeviceClass, set[str]]",
-    getattr(sensor_platform, "DEVICE_CLASS_UNITS"),
+    DEVICE_CLASS_UNITS,
 )
 
 PARALLEL_UPDATES = 1
@@ -127,9 +126,11 @@ SENSORS: Final[tuple[HomeWizardSensorEntityDescription, ...]] = (
         translation_key="active_tariff",
         has_fn=lambda data: data.measurement.tariff is not None,
         value_fn=(
-            lambda data: None
-            if data.measurement.tariff is None
-            else str(data.measurement.tariff)
+            lambda data: (
+                None
+                if data.measurement.tariff is None
+                else str(data.measurement.tariff)
+            )
         ),
         device_class=SensorDeviceClass.ENUM,
         options=["1", "2", "3", "4"],
@@ -142,13 +143,14 @@ SENSORS: Final[tuple[HomeWizardSensorEntityDescription, ...]] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
         has_fn=(
-            lambda data: data.system is not None
-            and data.system.wifi_strength_pct is not None
+            lambda data: (
+                data.system is not None and data.system.wifi_strength_pct is not None
+            )
         ),
         value_fn=(
-            lambda data: data.system.wifi_strength_pct
-            if data.system is not None
-            else None
+            lambda data: (
+                data.system.wifi_strength_pct if data.system is not None else None
+            )
         ),
     ),
     HomeWizardSensorEntityDescription(
@@ -159,8 +161,9 @@ SENSORS: Final[tuple[HomeWizardSensorEntityDescription, ...]] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
         has_fn=(
-            lambda data: data.system is not None
-            and data.system.wifi_rssi_db is not None
+            lambda data: (
+                data.system is not None and data.system.wifi_rssi_db is not None
+            )
         ),
         value_fn=(
             lambda data: data.system.wifi_rssi_db if data.system is not None else None
@@ -719,6 +722,11 @@ class HomeWizardSensorEntity(HomeWizardEntity, SensorEntity):
         """Initialize Sensor Domain."""
         super().__init__(coordinator)
         self.entity_description = description
+        self._uptime_system: System | None = None
+        self._uptime_value: StateType | datetime | None = None
+        if description.key == "uptime":
+            self._uptime_system = coordinator.data.system
+            self._uptime_value = description.value_fn(coordinator.data)
         self._attr_unique_id = f"{coordinator.config_entry.unique_id}_{description.key}"
         if not description.enabled_fn(self.coordinator.data):
             self._attr_entity_registry_enabled_default = False
@@ -726,6 +734,15 @@ class HomeWizardSensorEntity(HomeWizardEntity, SensorEntity):
     @property
     def native_value(self) -> StateType | datetime | None:
         """Return the sensor value."""
+        if self.entity_description.key == "uptime":
+            # Measurement pushes reuse the system snapshot. Its uptime must not
+            # be interpreted relative to a later wall clock on every push.
+            if self.coordinator.data.system is not self._uptime_system:
+                self._uptime_system = self.coordinator.data.system
+                self._uptime_value = self.entity_description.value_fn(
+                    self.coordinator.data
+                )
+            return self._uptime_value
         return self.entity_description.value_fn(self.coordinator.data)
 
     @property

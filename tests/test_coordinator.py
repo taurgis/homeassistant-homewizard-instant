@@ -1,81 +1,85 @@
-"""Tests for the coordinator."""
+"""Coordinator lifecycle and connection recovery tests."""
 
-from __future__ import annotations
-
-from unittest.mock import AsyncMock, Mock, patch
-
+import asyncio
+from unittest.mock import AsyncMock, patch
 import pytest
-from homewizard_energy.errors import DisabledError, RequestError
-
-from homeassistant.helpers.issue_registry import IssueSeverity
+from homewizard_energy.errors import RequestError, UnauthorizedError
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import UpdateFailed
-
 from custom_components.homewizard_instant.coordinator import (
     HWEnergyDeviceUpdateCoordinator,
 )
-from custom_components.homewizard_instant.const import DOMAIN
 
 
-async def test_coordinator_update_success(hass, mock_config_entry, mock_combined_data):
-    """Test coordinator successfully updates data."""
-    mock_config_entry.add_to_hass(hass)
-
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (RequestError(), UpdateFailed),
+        (UnauthorizedError(), ConfigEntryAuthFailed),
+        (TimeoutError(), UpdateFailed),
+    ],
+)
+async def test_initial_error(hass, mock_config_entry, error, expected):
     api = AsyncMock()
-    api.combined = AsyncMock(return_value=mock_combined_data)
-
+    api.connect.side_effect = error
     coordinator = HWEnergyDeviceUpdateCoordinator(hass, mock_config_entry, api)
-
-    with patch(
-        "custom_components.homewizard_instant.coordinator.ir.async_delete_issue"
-    ) as delete_issue:
-        data = await coordinator._async_update_data()
-
-    assert data == mock_combined_data
-    assert coordinator.data == mock_combined_data
-    assert coordinator.api_disabled is False
-    delete_issue.assert_called_once_with(hass, DOMAIN, "local_api_disabled")
-
-
-async def test_coordinator_request_error(hass, mock_config_entry):
-    """Test coordinator handles RequestError."""
-    mock_config_entry.add_to_hass(hass)
-
-    api = AsyncMock()
-    api.combined = AsyncMock(side_effect=RequestError("boom"))
-
-    coordinator = HWEnergyDeviceUpdateCoordinator(hass, mock_config_entry, api)
-
-    with pytest.raises(UpdateFailed) as err:
+    with pytest.raises(expected):
         await coordinator._async_update_data()
+    assert coordinator.update_interval is None
 
-    assert err.value.translation_key == "communication_error"
 
-
-async def test_coordinator_disabled_error_triggers_reload(
-    hass, mock_config_entry, mock_combined_data
-):
-    """Test coordinator handles DisabledError and schedules reload."""
-    mock_config_entry.add_to_hass(hass)
-
+async def test_initial_snapshot(hass, mock_config_entry, mock_combined_data):
     api = AsyncMock()
-    api.combined = AsyncMock(side_effect=DisabledError("disabled"))
-
+    api.connect.return_value = mock_combined_data
     coordinator = HWEnergyDeviceUpdateCoordinator(hass, mock_config_entry, api)
-    coordinator.data = mock_combined_data
+    assert await coordinator._async_update_data() == mock_combined_data
+    assert coordinator.update_interval is None
 
-    hass.config_entries.async_schedule_reload = Mock()
 
-    with patch(
-        "custom_components.homewizard_instant.coordinator.ir.async_create_issue"
-    ) as create_issue:
-        with pytest.raises(UpdateFailed) as err:
-            await coordinator._async_update_data()
+async def test_reconnect(hass, mock_config_entry, mock_combined_data):
+    api = AsyncMock()
+    api.receive.side_effect = [RequestError(), asyncio.CancelledError()]
+    api.connect.return_value = mock_combined_data
+    coordinator = HWEnergyDeviceUpdateCoordinator(hass, mock_config_entry, api)
+    with (
+        patch(
+            "custom_components.homewizard_instant.coordinator.asyncio.sleep",
+            new=AsyncMock(),
+        ) as sleep,
+        patch.object(coordinator, "async_set_updated_data") as update,
+        patch.object(coordinator, "async_set_update_error") as unavailable,
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await coordinator._listen()
+    unavailable.assert_called_once()
+    update.assert_called_once_with(mock_combined_data)
+    sleep.assert_awaited_once_with(1)
+    assert api.close.await_count == 2
 
-    assert err.value.translation_key == "api_disabled"
-    assert coordinator.api_disabled is True
-    create_issue.assert_called_once()
-    assert create_issue.call_args.args[:3] == (hass, DOMAIN, "local_api_disabled")
-    assert create_issue.call_args.kwargs["severity"] == IssueSeverity.ERROR
-    hass.config_entries.async_schedule_reload.assert_called_once_with(
-        mock_config_entry.entry_id
-    )
+
+async def test_revoked_token(hass, mock_config_entry):
+    api = AsyncMock()
+    api.receive.side_effect = UnauthorizedError()
+    coordinator = HWEnergyDeviceUpdateCoordinator(hass, mock_config_entry, api)
+    with patch.object(mock_config_entry, "async_start_reauth") as reauth:
+        await coordinator._listen()
+    reauth.assert_called_once_with(hass)
+    assert not coordinator.last_update_success
+    api.close.assert_awaited_once()
+
+
+async def test_stop_cancels_reader(hass, mock_config_entry):
+    api = AsyncMock()
+    ready = asyncio.Event()
+
+    async def receive():
+        ready.set()
+        await asyncio.Event().wait()
+
+    api.receive.side_effect = receive
+    coordinator = HWEnergyDeviceUpdateCoordinator(hass, mock_config_entry, api)
+    coordinator.async_start()
+    await ready.wait()
+    await coordinator.async_stop()
+    assert coordinator._task is None
+    assert api.close.await_count >= 1
