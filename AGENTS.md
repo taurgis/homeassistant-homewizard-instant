@@ -90,6 +90,7 @@ External devices (gas/water/heat meters):
 ## Update rate
 
 - There is no polling interval; the meter pushes measurements (1 s for DSMR 5, 10 s for older meters).
+- The `system` topic only pushes LED and cloud changes, so the coordinator sends a one-time `{"type": "system"}` read every `SYSTEM_REFRESH_INTERVAL` (60 s) over the same socket. This is the only request next to the stream; do not add others without a reason.
 - `STALE_AFTER` in `const.py` (60 s) decides when a silent meter makes entities unavailable. Keep it well above the slowest meter interval; only change it if explicitly requested.
 
 ## Quality and style expectations

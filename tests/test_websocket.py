@@ -85,7 +85,9 @@ async def test_handshake_and_snapshots():
             ],
             UnauthorizedError,
         ),
-        ([frame("authorization_requested"), frame("denied")], UnauthorizedError),
+        # Only user:unauthorized means a bad token; other replies must not
+        # start reauthentication.
+        ([frame("authorization_requested"), frame("denied")], RequestError),
         ([WSMessage(WSMsgType.CLOSED, None, None)], RequestError),
         (
             [
@@ -346,3 +348,20 @@ async def test_wrong_identity():
     with pytest.raises(RequestError):
         await api.connect()
     socket.close.assert_awaited_once()
+
+
+async def test_request_reads_a_topic_once_connected():
+    api, _, socket = client(initial())
+    await api.request("system")
+    socket.send_json.assert_not_called()
+    await api.connect()
+    socket.send_json.reset_mock()
+    socket.closed = False
+    await api.request("system")
+    socket.send_json.assert_awaited_once_with({"type": "system"})
+    socket.send_json.side_effect = ConnectionResetError()
+    await api.request("system")
+    await api.close()
+    socket.send_json.reset_mock()
+    await api.request("system")
+    socket.send_json.assert_not_called()

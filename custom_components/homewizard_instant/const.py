@@ -23,3 +23,7 @@ CONF_SERIAL = "serial"
 # socket itself stays up (for example an unplugged P1 cable). DSMR 2-4 meters
 # report every 10 s, DSMR 5 every second.
 STALE_AFTER = timedelta(seconds=60)
+
+# The system topic only pushes LED and cloud changes, so Wi-Fi signal and uptime
+# are read once per interval over the open WebSocket.
+SYSTEM_REFRESH_INTERVAL = timedelta(seconds=60)

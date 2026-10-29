@@ -45,7 +45,7 @@ The integration stores a v2 token under a separate local device user and keeps d
 
 One TLS-verified `wss://<host>/api/ws` connection authenticates and subscribes to `device`, `measurement` and `system`. Setup waits for all three initial snapshots. All entities read from the coordinator data.
 
-Disconnects mark entities unavailable and trigger reconnect attempts with backoff from 1 to 60 seconds. If the socket stays up but the meter sends no measurement for 60 seconds (for example when the P1 cable is unplugged from the smart meter), sensors become unavailable until measurements resume. A field the meter reports as null or out of range makes only that sensor unavailable; the rest keep updating. Sensors for fields that first appear after setup are added automatically. Revoked tokens start reauthentication. Unloading cancels the reader and closes the socket.
+Disconnects mark entities unavailable and trigger reconnect attempts with backoff from 1 to 60 seconds; the delay only starts over at 1 second after a connection has stayed up for a minute. If the socket stays up but the meter sends no measurement for 60 seconds (for example when the P1 cable is unplugged from the smart meter), sensors become unavailable until measurements resume. A field the meter reports as null or out of range makes only that sensor unavailable; the rest keep updating. Sensors for fields that first appear after setup are added automatically. Revoked tokens start reauthentication. Unloading cancels the reader and closes the socket.
 
 ### Upgrading from API v1
 
@@ -77,7 +77,7 @@ Existing entries prompt for one-time v2 pairing after updating and restarting. C
 ## Known limitations
 
 - Measurement frequency is determined by the physical smart meter. WebSockets cannot make it report faster.
-- HomeWizard only guarantees real-time pushes for certain system settings; Wi-Fi and uptime diagnostics may not refresh continuously.
+- HomeWizard only pushes some system settings in real time, so the integration reads Wi-Fi signal and uptime once a minute over the open WebSocket.
 - Only P1 meters are supported; other HomeWizard devices are not supported.
 - This integration does not register services or actions.
 

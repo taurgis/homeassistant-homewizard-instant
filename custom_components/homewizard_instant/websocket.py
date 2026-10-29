@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from aiohttp import (
+    ClientError,
     ClientSession,
     ClientWebSocketResponse,
     WSMsgType,
@@ -237,6 +238,7 @@ class HomeWizardWebSocket:
         self._identifier = identifier
         self._context = context
         self._socket: ClientWebSocketResponse | None = None
+        self._ready = False
         self._topics: dict[str, Any] = {}
         self._invalid = 0
         self._last_warning: dict[str, float] = {}
@@ -264,11 +266,14 @@ class HomeWizardWebSocket:
                 )
                 message = await self._next_message()
                 if message.get("type") != "authorized":
-                    raise UnauthorizedError("WebSocket authorization rejected")
+                    # A rejected token arrives as a user:unauthorized error and
+                    # raises in _receive; anything else is a protocol fault.
+                    raise RequestError("Expected authorization confirmation")
                 for topic in _TOPICS:
                     await self._socket.send_json({"type": "subscribe", "data": topic})
                 while not all(key in self._topics for key in _TOPICS):
                     self._apply(await self._next_message())
+                self._ready = True
                 return self._snapshot()
         except WSServerHandshakeError as err:
             await self.close()
@@ -278,6 +283,16 @@ class HomeWizardWebSocket:
         except BaseException:
             await self.close()
             raise
+
+    async def request(self, topic: str) -> None:
+        """Ask for the latest values of a topic; the reply arrives via receive()."""
+        if not self._ready or self._socket is None or self._socket.closed:
+            return
+        try:
+            await self._socket.send_json({"type": topic})
+        except (ClientError, ConnectionResetError) as err:
+            # The reader notices the broken socket and reconnects.
+            LOGGER.debug("Could not request HomeWizard %s data: %s", topic, err)
 
     def _warn(self, key: str, message: str, *args: object) -> None:
         """Log a repeated socket fault once a minute instead of once a frame."""
@@ -386,6 +401,7 @@ class HomeWizardWebSocket:
 
     async def close(self) -> None:
         """Close only our socket; the session belongs to Home Assistant."""
+        self._ready = False
         if self._socket is not None:
             await self._socket.close()
             self._socket = None

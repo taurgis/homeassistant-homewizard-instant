@@ -17,7 +17,7 @@ The integration is bind-mounted from `custom_components/homewizard_instant`. Hom
 
 The meters speak HTTPS with a certificate shaped like a real P1 meter: common name and DNS SAN `appliance/p1dongle/<serial>`. `python-homewizard-energy` only trusts HomeWizard's appliance CA, and that private key is not public, so the lab CA is loaded only when `HOMEWIZARD_DEV_CA` points at a PEM file that contains a real certificate. Loading it logs a warning, because every HomeWizard client in that process then trusts the lab CA. Leave the variable unset on a normal install.
 
-The WebSocket matches the v2 handshake. The meter sends `authorization_requested`, and the client must answer with `{"type":"authorization","data":"<token>"}` within 40 seconds. Measurement and system frames are pushed only after a `subscribe` for that topic. A client that has not subscribed stays quiet.
+The WebSocket matches the v2 handshake. The meter sends `authorization_requested`, and the client must answer with `{"type":"authorization","data":"<token>"}` within 40 seconds. Measurement and system frames are pushed only after a `subscribe` for that topic. A client that has not subscribed stays quiet. Like real firmware, only measurements stream; a client reads fresh system fields (`wifi_rssi_db`, `uptime_s`) by sending `{"type":"system"}`.
 
 ## Run it
 

@@ -90,19 +90,33 @@ async def test_refresh_while_listener_is_running(
     coordinator.last_update_success = True
     assert await coordinator._async_update_data() is mock_combined_data
     coordinator.last_update_success = False
-    with pytest.raises(UpdateFailed):
+    with pytest.raises(UpdateFailed) as err:
         await coordinator._async_update_data()
+    assert err.value.translation_key == "reconnecting"
     api.connect.assert_not_called()
 
 
-async def test_successful_push_resets_backoff(hass, mock_config_entry, mock_combined_data):
+@pytest.mark.parametrize(("uptime", "delays"), [(60.0, [1, 1]), (5.0, [1, 2])])
+async def test_backoff_resets_only_after_a_stable_connection(
+    hass, mock_config_entry, mock_combined_data, uptime, delays, monkeypatch
+):
+    """A meter that accepts and then drops every connection keeps backing off."""
     api = AsyncMock()
     api.receive.side_effect = [
+        RequestError(),
         mock_combined_data,
         RequestError(),
         asyncio.CancelledError(),
     ]
+    api.connect.return_value = mock_combined_data
     coordinator = HWEnergyDeviceUpdateCoordinator(hass, mock_config_entry, api)
+    from types import SimpleNamespace
+
+    from custom_components.homewizard_instant import coordinator as module
+
+    # Connected at 0, dropped at 0, reconnected at 10, dropped, reconnected.
+    clock = iter([0.0, 0.0, 10.0, 10.0 + uptime, 99.0 + uptime])
+    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: next(clock)))
     with (
         patch(
             "custom_components.homewizard_instant.coordinator.asyncio.sleep",
@@ -110,10 +124,38 @@ async def test_successful_push_resets_backoff(hass, mock_config_entry, mock_comb
         ) as sleep,
         patch.object(coordinator, "async_set_updated_data"),
         patch.object(coordinator, "async_set_update_error"),
+        pytest.raises(asyncio.CancelledError),
     ):
-        with pytest.raises(asyncio.CancelledError):
-            await coordinator._listen()
-    sleep.assert_awaited_once_with(1)
+        await coordinator._listen()
+    assert [call.args[0] for call in sleep.await_args_list] == delays
+
+
+async def test_system_refresh_requests_the_system_topic(hass, mock_config_entry):
+    api = AsyncMock()
+    coordinator = HWEnergyDeviceUpdateCoordinator(hass, mock_config_entry, api)
+    await coordinator._async_refresh_system()
+    api.request.assert_awaited_once_with("system")
+
+
+async def test_disconnect_after_stale_is_logged(
+    hass, mock_config_entry, mock_combined_data, caplog
+):
+    api = AsyncMock()
+    coordinator = HWEnergyDeviceUpdateCoordinator(hass, mock_config_entry, api)
+    coordinator.async_set_updated_data(mock_combined_data)
+    coordinator._stale = True
+    coordinator.async_set_update_error(UpdateFailed("stale"))
+    with (
+        patch(
+            "custom_components.homewizard_instant.coordinator.asyncio.sleep",
+            new=AsyncMock(),
+        ),
+        caplog.at_level(logging.WARNING),
+    ):
+        await coordinator._async_connection_lost(RequestError("gone"), 1, unexpected=False)
+        await coordinator._async_connection_lost(RequestError("gone"), 2, unexpected=False)
+    assert caplog.text.count("WebSocket unavailable") == 1
+    assert not coordinator._stale
 
 
 async def test_stop_cancels_reader(hass, mock_config_entry):
@@ -250,6 +292,6 @@ async def test_start_and_stop_manage_the_watchdog(hass, mock_config_entry):
     mock_config_entry.add_to_hass(hass)
     coordinator = HWEnergyDeviceUpdateCoordinator(hass, mock_config_entry, api)
     coordinator.async_start()
-    assert coordinator._unsub_stale_check is not None
+    assert len(coordinator._unsubs) == 2
     await coordinator.async_stop()
-    assert coordinator._unsub_stale_check is None
+    assert coordinator._unsubs == []

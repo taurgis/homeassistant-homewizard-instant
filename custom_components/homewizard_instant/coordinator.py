@@ -19,7 +19,7 @@ from homewizard_energy.errors import RequestError, UnauthorizedError
 from homewizard_energy.models import CombinedModels
 from mashumaro.exceptions import InvalidFieldValue, MissingField
 
-from .const import DOMAIN, LOGGER, STALE_AFTER
+from .const import DOMAIN, LOGGER, STALE_AFTER, SYSTEM_REFRESH_INTERVAL
 from .websocket import HomeWizardWebSocket
 
 type HomeWizardConfigEntry = ConfigEntry[HWEnergyDeviceUpdateCoordinator]
@@ -32,6 +32,10 @@ CONNECTION_ERRORS = (
     InvalidFieldValue,
 )
 _STALE_CHECK_INTERVAL = timedelta(seconds=10)
+# A connection must stay up this long before the reconnect delay starts at 1 s
+# again; a meter that accepts and then drops every connection backs off to 60 s.
+_STABLE_AFTER = 60
+_MAX_DELAY = 60
 
 
 def _reason(err: BaseException) -> str:
@@ -60,14 +64,16 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[CombinedModels]):
         super().__init__(hass, LOGGER, config_entry=config_entry, name=DOMAIN)
         self.api = api
         self._task: asyncio.Task[None] | None = None
-        self._unsub_stale_check: Callable[[], None] | None = None
+        self._unsubs: list[Callable[[], None]] = []
         self._stale = False
 
     async def _async_update_data(self) -> CombinedModels:
         """Connect initially; subsequent refresh requests use cached push data."""
         if self._task is not None:
             if not self.last_update_success:
-                raise UpdateFailed("Waiting for WebSocket reconnection")
+                raise UpdateFailed(
+                    translation_domain=DOMAIN, translation_key="reconnecting"
+                )
             return self.data
         try:
             return await self.api.connect()
@@ -84,9 +90,18 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[CombinedModels]):
         self._task = self.config_entry.async_create_background_task(
             self.hass, self._listen(), "HomeWizard Instant WebSocket"
         )
-        self._unsub_stale_check = async_track_time_interval(
-            self.hass, self._async_check_stale, _STALE_CHECK_INTERVAL
-        )
+        self._unsubs = [
+            async_track_time_interval(
+                self.hass, self._async_check_stale, _STALE_CHECK_INTERVAL
+            ),
+            async_track_time_interval(
+                self.hass, self._async_refresh_system, SYSTEM_REFRESH_INTERVAL
+            ),
+        ]
+
+    async def _async_refresh_system(self, _now: datetime | None = None) -> None:
+        """Read Wi-Fi signal and uptime, which the meter does not push."""
+        await self.api.request("system")
 
     @callback
     def _async_check_stale(self, _now: datetime | None = None) -> None:
@@ -142,30 +157,31 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[CombinedModels]):
     async def _listen(self) -> None:
         delay = 1
         connected = True
+        connected_at = time.monotonic()
         try:
             while True:
                 try:
                     if not connected:
                         data = await self.api.connect()
                         connected = True
+                        connected_at = time.monotonic()
                         self._stale = False
                         LOGGER.info("HomeWizard WebSocket reconnected")
                         self._async_publish(data)
                     self._async_publish(await self.api.receive())
-                    delay = 1
                 except UnauthorizedError as err:
                     LOGGER.warning("HomeWizard token was rejected: %s", err)
                     self.async_set_update_error(ConfigEntryAuthFailed("Token rejected"))
                     self.config_entry.async_start_reauth(self.hass)
                     return
-                except CONNECTION_ERRORS as err:
-                    await self._async_connection_lost(err, delay, unexpected=False)
-                    connected = False
-                    delay = min(delay * 2, 60)
                 except Exception as err:  # noqa: BLE001 - keep the reader alive
-                    await self._async_connection_lost(err, delay, unexpected=True)
+                    if connected and time.monotonic() - connected_at >= _STABLE_AFTER:
+                        delay = 1
                     connected = False
-                    delay = min(delay * 2, 60)
+                    await self._async_connection_lost(
+                        err, delay, unexpected=not isinstance(err, CONNECTION_ERRORS)
+                    )
+                    delay = min(delay * 2, _MAX_DELAY)
         finally:
             await self.api.close()
 
@@ -173,7 +189,8 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[CombinedModels]):
         self, err: Exception, delay: int, *, unexpected: bool
     ) -> None:
         """Log once per outage, mark entities unavailable, then back off."""
-        if self.last_update_success:
+        if self.last_update_success or self._stale:
+            self._stale = False
             if unexpected:
                 LOGGER.exception(
                     "Unexpected HomeWizard WebSocket error; reconnecting in %s s",
@@ -198,9 +215,8 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[CombinedModels]):
 
     async def async_stop(self) -> None:
         """Cancel and await the reader before closing the transport."""
-        if self._unsub_stale_check is not None:
-            self._unsub_stale_check()
-            self._unsub_stale_check = None
+        while self._unsubs:
+            self._unsubs.pop()()
         if self._task is not None:
             self._task.cancel()
             with suppress(asyncio.CancelledError):

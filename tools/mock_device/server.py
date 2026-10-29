@@ -15,6 +15,7 @@ from .certs import ensure_ca, issue_cert
 from .meter import FAULT_NAMES, Meter
 
 LOGGER = logging.getLogger("mock_device")
+_TOPICS = frozenset({"device", "measurement", "system"})
 
 
 class MeterServer:
@@ -209,11 +210,16 @@ class MeterServer:
                     client = message.json()
                 except ValueError:
                     continue
-                if isinstance(client, dict) and client.get("type") == "subscribe":
+                if not isinstance(client, dict):
+                    continue
+                if client.get("type") == "subscribe":
                     topic = client.get("data")
-                    if isinstance(topic, str) and topic in {"device", "measurement", "system"}:
+                    if isinstance(topic, str) and topic in _TOPICS:
                         subscribed.add(topic)
                         await self._send_topic(socket, topic)
+                elif client.get("type") in _TOPICS:
+                    # One-time read, like the real meter's "Polling Data" request.
+                    await self._send_topic(socket, str(client["type"]))
         finally:
             pusher.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -229,7 +235,8 @@ class MeterServer:
     async def _push_loop(
         self, socket: web.WebSocketResponse, subscribed: set[str]
     ) -> None:
-        next_system = asyncio.get_running_loop().time() + 30
+        # Like real firmware, only measurements stream; system fields such as
+        # wifi_rssi_db and uptime_s change only on a one-time read.
         while not socket.closed:
             interval = self.meter.faults.slow_interval or self.meter.push_interval
             await asyncio.sleep(interval)
@@ -243,18 +250,8 @@ class MeterServer:
                 elif fault is not None:
                     await socket.send_json(fault)
                     self.meter.pushes += 1
-                else:
-                    now = asyncio.get_running_loop().time()
-                    topic = (
-                        "system"
-                        if now >= next_system and "system" in subscribed
-                        else "measurement"
-                    )
-                    if topic not in subscribed:
-                        continue
-                    if topic == "system":
-                        next_system = now + 30
-                    await self._send_topic(socket, topic)
+                elif "measurement" in subscribed:
+                    await self._send_topic(socket, "measurement")
             except (ConnectionResetError, RuntimeError):
                 return
 
@@ -339,7 +336,7 @@ class MeterServer:
     async def _push_now(self, request: web.Request) -> web.Response:
         body = await _body(request)
         topic = body.get("topic", "measurement")
-        if topic not in {"device", "measurement", "system"}:
+        if topic not in _TOPICS:
             return _json({"error": "unknown topic"}, status=400)
         await self._broadcast(str(topic))
         return _json({"pushed": topic})
