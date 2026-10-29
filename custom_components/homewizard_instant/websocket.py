@@ -51,7 +51,14 @@ def _measurement_ranges() -> dict[str, tuple[float, float]]:
     ranges.update(_phases("apparent_power", "va", 0, 1_000_000))
     ranges.update(_phases("reactive_power", "var", -1_000_000, 1_000_000))
     ranges.update(
-        _bounds(-1, 1, "power_factor", "power_factor_l1", "power_factor_l2", "power_factor_l3")
+        _bounds(
+            -1,
+            1,
+            "power_factor",
+            "power_factor_l1",
+            "power_factor_l2",
+            "power_factor_l3",
+        )
     )
     for direction in ("import", "export"):
         ranges.update(
@@ -90,9 +97,11 @@ _MEASUREMENT_RANGES = _measurement_ranges()
 # RSSI of -127 is a normal "no signal" reading. Tariff is intentionally absent:
 # python-homewizard-energy already nulls values outside 1..4 and keeps the rest
 # of the snapshot. Rejecting it here would freeze power for those meters.
-_SYSTEM_RANGES = _bounds(-200, 0, "wifi_rssi_db") | _bounds(
-    0, 10 * 365 * 24 * 3600, "uptime_s"
-) | _bounds(0, 100, "status_led_brightness_pct")
+_SYSTEM_RANGES = (
+    _bounds(-200, 0, "wifi_rssi_db")
+    | _bounds(0, 10 * 365 * 24 * 3600, "uptime_s")
+    | _bounds(0, 100, "status_led_brightness_pct")
+)
 _TOPIC_RANGES = {
     "device": {},
     "measurement": _MEASUREMENT_RANGES,
@@ -264,6 +273,9 @@ class HomeWizardWebSocket:
         self._socket: ClientWebSocketResponse | None = None
         self._ready = False
         self._topics: dict[str, Any] = {}
+        # Survives reconnects: a meter replays its latest measurement on
+        # subscribe, which must not count as a fresh one.
+        self._measurement: Measurement | None = None
         self._invalid = 0
         self._last_warning: dict[str, float] = {}
         self.last_measurement = time.monotonic()
@@ -351,7 +363,9 @@ class HomeWizardWebSocket:
             self._reject_invalid()
             return None
         if not isinstance(payload, dict) or not isinstance(payload.get("type"), str):
-            self._warn("shape", "Ignoring HomeWizard WebSocket message with unexpected shape")
+            self._warn(
+                "shape", "Ignoring HomeWizard WebSocket message with unexpected shape"
+            )
             self._reject_invalid()
             return None
         if payload["type"] == "error":
@@ -363,7 +377,13 @@ class HomeWizardWebSocket:
             )
             if error == "user:unauthorized":
                 raise UnauthorizedError("WebSocket token rejected")
-            raise RequestError("HomeWizard WebSocket returned an error")
+            if not self._ready:
+                raise RequestError(f"HomeWizard WebSocket returned an error: {error}")
+            # Errors answer a single request; the subscriptions keep streaming.
+            self._warn(
+                f"error-{error}", "HomeWizard WebSocket returned an error: %s", error
+            )
+            return None
         return payload
 
     def _apply(self, message: dict[str, Any]) -> bool:
@@ -373,7 +393,9 @@ class HomeWizardWebSocket:
             return False
         data = message.get("data")
         if not isinstance(data, dict):
-            self._warn("payload", "Ignoring HomeWizard %s message with invalid payload", topic)
+            self._warn(
+                "payload", "Ignoring HomeWizard %s message with invalid payload", topic
+            )
             return self._reject_invalid()
         data, problems = _sanitize(topic, data)
         try:
@@ -385,12 +407,16 @@ class HomeWizardWebSocket:
                     raise RequestError("WebSocket device identity changed")
                 self._topics[topic] = device
             elif topic == "measurement":
-                self._topics[topic] = _parse(Measurement, data, problems)
-                self.last_measurement = time.monotonic()
+                measurement = _parse(Measurement, data, problems)
+                if measurement.timestamp is None or measurement != self._measurement:
+                    self.last_measurement = time.monotonic()
+                self._topics[topic] = self._measurement = measurement
             else:
                 self._topics[topic] = _parse(System, data, problems)
         except (MissingField, InvalidFieldValue, ValueError) as err:
-            self._warn("invalid", "Ignoring invalid HomeWizard %s message: %s", topic, err)
+            self._warn(
+                "invalid", "Ignoring invalid HomeWizard %s message: %s", topic, err
+            )
             return self._reject_invalid()
         finally:
             if problems:

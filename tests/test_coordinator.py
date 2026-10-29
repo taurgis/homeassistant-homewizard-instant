@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from homewizard_energy.errors import RequestError, UnauthorizedError
@@ -77,6 +78,7 @@ async def test_revoked_token(hass, mock_config_entry, caplog):
     assert "token was rejected" in caplog.text
     reauth.assert_called_once_with(hass)
     assert not coordinator.last_update_success
+    assert coordinator.last_exception.translation_key == "token_rejected"
     api.close.assert_awaited_once()
 
 
@@ -152,10 +154,61 @@ async def test_disconnect_after_stale_is_logged(
         ),
         caplog.at_level(logging.WARNING),
     ):
-        await coordinator._async_connection_lost(RequestError("gone"), 1, unexpected=False)
-        await coordinator._async_connection_lost(RequestError("gone"), 2, unexpected=False)
+        await coordinator._async_connection_lost(
+            RequestError("gone"), 1, was_connected=True, unexpected=False
+        )
+        await coordinator._async_connection_lost(
+            RequestError("gone"), 2, was_connected=False, unexpected=False
+        )
     assert caplog.text.count("WebSocket unavailable") == 1
-    assert not coordinator._stale
+
+
+async def test_reconnect_while_stale_needs_a_fresh_measurement(
+    hass, mock_config_entry, mock_combined_data, caplog
+):
+    """The snapshot a silent meter replays on subscribe is not a new reading."""
+    from dataclasses import replace
+
+    api = AsyncMock()
+    api.last_measurement = time.monotonic() - 120
+    replayed = replace(mock_combined_data, system=replace(mock_combined_data.system))
+    api.connect.return_value = replayed
+    api.receive.side_effect = [RequestError("gone"), asyncio.CancelledError()]
+    coordinator = HWEnergyDeviceUpdateCoordinator(hass, mock_config_entry, api)
+    coordinator.async_set_updated_data(mock_combined_data)
+    coordinator._stale = True
+    coordinator.async_set_update_error(UpdateFailed("stale"))
+    with (
+        patch(
+            "custom_components.homewizard_instant.coordinator.asyncio.sleep",
+            new=AsyncMock(),
+        ),
+        caplog.at_level(logging.INFO),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await coordinator._listen()
+    assert "reconnected" in caplog.text
+    assert not coordinator.last_update_success
+    assert coordinator._stale
+    assert coordinator.last_exception.translation_key == "stale_data"
+    assert "measurements resumed" not in caplog.text
+
+
+async def test_fresh_connection_gets_a_full_stale_window(
+    hass, mock_config_entry, mock_combined_data
+):
+    """After a long outage, the replayed snapshot is not stale on arrival."""
+    api = Mock()
+    api.last_measurement = 0.0
+    coordinator = HWEnergyDeviceUpdateCoordinator(hass, mock_config_entry, api)
+    coordinator.async_set_updated_data(mock_combined_data)
+    coordinator._connected_at = 100.0
+    with patch(
+        "custom_components.homewizard_instant.coordinator.time.monotonic",
+        return_value=150.0,
+    ):
+        coordinator._async_check_stale()
+    assert coordinator.last_update_success
 
 
 async def test_stop_cancels_reader(hass, mock_config_entry):
@@ -206,6 +259,7 @@ async def test_stale_measurements_mark_unavailable(
     api = Mock()
     api.last_measurement = 0.0
     coordinator = HWEnergyDeviceUpdateCoordinator(hass, mock_config_entry, api)
+    coordinator._connected_at = 0.0
     coordinator.async_set_updated_data(mock_combined_data)
     with patch(
         "custom_components.homewizard_instant.coordinator.time.monotonic",
@@ -231,6 +285,7 @@ async def test_stale_measurements_mark_unavailable(
     )
     assert not coordinator.last_update_success
     fresh = replace(mock_combined_data, measurement=replace(mock_combined_data.measurement))
+    api.last_measurement = time.monotonic()
     with caplog.at_level(logging.INFO):
         coordinator._async_publish(fresh)
     assert coordinator.last_update_success
@@ -311,7 +366,9 @@ async def test_outage_is_logged_once_without_an_error_line(
         ),
         caplog.at_level(logging.WARNING),
     ):
-        await coordinator._async_connection_lost(RequestError("gone"), 1, unexpected=False)
+        await coordinator._async_connection_lost(
+            RequestError("gone"), 1, was_connected=True, unexpected=False
+        )
     assert not coordinator.last_update_success
     assert coordinator.last_exception.translation_key == "communication_error"
     listener.assert_called_once()

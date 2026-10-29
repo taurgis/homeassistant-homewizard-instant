@@ -1,6 +1,7 @@
 """WebSocket protocol tests with real library model parsing."""
 
 import json
+import logging
 import ssl
 from unittest.mock import AsyncMock, Mock
 import pytest
@@ -123,19 +124,38 @@ async def test_runtime_rejection():
     await api.close()
 
 
-@pytest.mark.parametrize(
-    "message",
-    [
-        frame("error", {"message": "invalid"}),
-        WSMessage(WSMsgType.CLOSE, None, None),
-    ],
-)
-async def test_bad_update(message):
-    api, _, _ = client(initial() + [message])
+async def test_bad_update():
+    api, _, _ = client(initial() + [WSMessage(WSMsgType.CLOSE, None, None)])
     await api.connect()
     with pytest.raises(RequestError):
         await api.receive()
     await api.close()
+
+
+async def test_request_error_keeps_the_stream(caplog):
+    """An error frame answers one request; it does not end the connection."""
+    api, _, socket = client(initial())
+    await api.connect()
+    socket.receive.side_effect = [
+        frame("error", {"message": "request:unknown"}),
+        frame("error", {"message": "request:unknown"}),
+        frame("measurement", {"power_w": 7}),
+    ]
+    with caplog.at_level(logging.DEBUG):
+        data = await api.receive()
+    assert data.measurement.power_w == 7
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "request:unknown" in warnings[0].getMessage()
+    await api.close()
+
+
+async def test_error_during_handshake_names_the_device_message():
+    api, _, _ = client(
+        [frame("authorization_requested"), frame("error", {"message": "busy"})]
+    )
+    with pytest.raises(RequestError, match="busy"):
+        await api.connect()
 
 
 async def test_reconnect_resets_snapshots():
@@ -255,6 +275,29 @@ async def test_bad_external_meters_are_dropped():
     updated = await api.receive()
     assert updated.measurement.power_w == 5
     assert [d.value for d in updated.measurement.external_devices.values()] == [2.5]
+
+
+async def test_replayed_measurement_is_not_fresh(monkeypatch):
+    """A silent meter replays its last reading on subscribe after a reconnect."""
+    import custom_components.homewizard_instant.websocket as module
+
+    from types import SimpleNamespace
+
+    clock = iter([0.0, 10.0, 20.0])
+    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: next(clock)))
+    measurement = {"power_w": 1, "timestamp": "2026-01-01T00:00:00"}
+    api, _, socket = client(initial()[:-1] + [frame("measurement", measurement)])
+    await api.connect()
+    assert api.last_measurement == 10.0
+    socket.receive.side_effect = initial()[:-1] + [frame("measurement", measurement)]
+    await api.connect()
+    assert api.last_measurement == 10.0
+    socket.receive.side_effect = [
+        frame("measurement", {**measurement, "timestamp": "2026-01-01T00:00:01"})
+    ]
+    await api.receive()
+    assert api.last_measurement == 20.0
+    await api.close()
 
 
 async def test_last_measurement_tracks_measurements_only(monkeypatch):

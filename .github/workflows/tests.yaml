@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - master
+      - "feature/**"
   pull_request:
 
 jobs:
@@ -13,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.13"]
+        python-version: ["3.14"]
     steps:
       - uses: actions/checkout@v4
 
@@ -38,6 +39,6 @@ jobs:
 
       - name: Upload coverage reports
         uses: codecov/codecov-action@v4
-        if: matrix.python-version == '3.13'
+        if: matrix.python-version == '3.14'
         with:
           fail_ci_if_error: false

@@ -1,6 +1,6 @@
 # Lab Home Assistant plus two emulated P1 meters.
 # Default image is current Home Assistant. For the documented minimum:
-#   HA_IMAGE_TAG=2025.10.4 docker compose up -d --build
+#   HA_IMAGE_TAG=2026.8.0 docker compose up -d --build
 
 name: homewizard-instant
 

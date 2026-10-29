@@ -54,11 +54,17 @@
     "communication_error": {
       "message": "Failed to communicate with the device: {error}"
     },
+    "pairing_required": {
+      "message": "Pair this P1 meter with the local API v2 by pressing its button during reauthentication."
+    },
     "reconnecting": {
       "message": "Waiting for the connection to the P1 meter to recover."
     },
     "stale_data": {
       "message": "The P1 meter sent no measurements for {seconds} seconds. Check the cable between the P1 meter and the smart meter."
+    },
+    "token_rejected": {
+      "message": "The P1 meter rejected the API token. Reauthenticate to pair it again."
     }
   },
   "issues": {},

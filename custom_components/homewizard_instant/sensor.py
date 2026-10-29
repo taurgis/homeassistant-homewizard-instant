@@ -5,7 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Final, cast
+from functools import partial
+from typing import Final, cast
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -30,21 +31,10 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.typing import StateType
 from homeassistant.util.dt import utcnow
 from homewizard_energy.models import CombinedModels, ExternalDevice, System
-
-if TYPE_CHECKING:
-    from homeassistant.helpers.entity_platform import (
-        AddEntitiesCallback as AddConfigEntryEntitiesCallback,
-    )
-else:
-    try:
-        from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
-    except ImportError:  # pragma: no cover - fallback for older HA versions
-        from homeassistant.helpers.entity_platform import (
-            AddEntitiesCallback as AddConfigEntryEntitiesCallback,
-        )
 
 from .const import DOMAIN
 from .coordinator import HomeWizardConfigEntry, HWEnergyDeviceUpdateCoordinator
@@ -85,7 +75,9 @@ def uptime_to_datetime(value: int) -> datetime:
     return utcnow().replace(microsecond=0) - timedelta(seconds=value)
 
 
-_UPTIME_VARIANCE = timedelta(minutes=5)
+# The meter answers a system read once a minute; HA keeps the boot time
+# while successive estimates stay within this window.
+_UPTIME_DRIFT_TOLERANCE = 300
 
 SENSORS: Final[tuple[HomeWizardSensorEntityDescription, ...]] = (
     HomeWizardSensorEntityDescription(
@@ -175,7 +167,7 @@ SENSORS: Final[tuple[HomeWizardSensorEntityDescription, ...]] = (
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
         has_fn=lambda data: data.measurement.energy_import_kwh is not None,
-        value_fn=lambda data: data.measurement.energy_import_kwh,
+        value_fn=lambda data: data.measurement.energy_import_kwh or None,
     ),
     HomeWizardSensorEntityDescription(
         key="total_power_import_t1_kwh",
@@ -189,7 +181,7 @@ SENSORS: Final[tuple[HomeWizardSensorEntityDescription, ...]] = (
             data.measurement.energy_import_t1_kwh is not None
             and data.measurement.energy_import_t2_kwh is not None
         ),
-        value_fn=lambda data: data.measurement.energy_import_t1_kwh,
+        value_fn=lambda data: data.measurement.energy_import_t1_kwh or None,
     ),
     HomeWizardSensorEntityDescription(
         key="total_power_import_t2_kwh",
@@ -199,7 +191,7 @@ SENSORS: Final[tuple[HomeWizardSensorEntityDescription, ...]] = (
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
         has_fn=lambda data: data.measurement.energy_import_t2_kwh is not None,
-        value_fn=lambda data: data.measurement.energy_import_t2_kwh,
+        value_fn=lambda data: data.measurement.energy_import_t2_kwh or None,
     ),
     HomeWizardSensorEntityDescription(
         key="total_power_import_t3_kwh",
@@ -209,7 +201,7 @@ SENSORS: Final[tuple[HomeWizardSensorEntityDescription, ...]] = (
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
         has_fn=lambda data: data.measurement.energy_import_t3_kwh is not None,
-        value_fn=lambda data: data.measurement.energy_import_t3_kwh,
+        value_fn=lambda data: data.measurement.energy_import_t3_kwh or None,
     ),
     HomeWizardSensorEntityDescription(
         key="total_power_import_t4_kwh",
@@ -219,7 +211,7 @@ SENSORS: Final[tuple[HomeWizardSensorEntityDescription, ...]] = (
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
         has_fn=lambda data: data.measurement.energy_import_t4_kwh is not None,
-        value_fn=lambda data: data.measurement.energy_import_t4_kwh,
+        value_fn=lambda data: data.measurement.energy_import_t4_kwh or None,
     ),
     HomeWizardSensorEntityDescription(
         key="total_power_export_kwh",
@@ -229,7 +221,7 @@ SENSORS: Final[tuple[HomeWizardSensorEntityDescription, ...]] = (
         state_class=SensorStateClass.TOTAL_INCREASING,
         has_fn=lambda data: data.measurement.energy_export_kwh is not None,
         enabled_fn=lambda data: data.measurement.energy_export_kwh != 0,
-        value_fn=lambda data: data.measurement.energy_export_kwh,
+        value_fn=lambda data: data.measurement.energy_export_kwh or None,
     ),
     HomeWizardSensorEntityDescription(
         key="total_power_export_t1_kwh",
@@ -244,7 +236,7 @@ SENSORS: Final[tuple[HomeWizardSensorEntityDescription, ...]] = (
             and data.measurement.energy_export_t2_kwh is not None
         ),
         enabled_fn=lambda data: data.measurement.energy_export_t1_kwh != 0,
-        value_fn=lambda data: data.measurement.energy_export_t1_kwh,
+        value_fn=lambda data: data.measurement.energy_export_t1_kwh or None,
     ),
     HomeWizardSensorEntityDescription(
         key="total_power_export_t2_kwh",
@@ -255,7 +247,7 @@ SENSORS: Final[tuple[HomeWizardSensorEntityDescription, ...]] = (
         state_class=SensorStateClass.TOTAL_INCREASING,
         has_fn=lambda data: data.measurement.energy_export_t2_kwh is not None,
         enabled_fn=lambda data: data.measurement.energy_export_t2_kwh != 0,
-        value_fn=lambda data: data.measurement.energy_export_t2_kwh,
+        value_fn=lambda data: data.measurement.energy_export_t2_kwh or None,
     ),
     HomeWizardSensorEntityDescription(
         key="total_power_export_t3_kwh",
@@ -266,7 +258,7 @@ SENSORS: Final[tuple[HomeWizardSensorEntityDescription, ...]] = (
         state_class=SensorStateClass.TOTAL_INCREASING,
         has_fn=lambda data: data.measurement.energy_export_t3_kwh is not None,
         enabled_fn=lambda data: data.measurement.energy_export_t3_kwh != 0,
-        value_fn=lambda data: data.measurement.energy_export_t3_kwh,
+        value_fn=lambda data: data.measurement.energy_export_t3_kwh or None,
     ),
     HomeWizardSensorEntityDescription(
         key="total_power_export_t4_kwh",
@@ -277,7 +269,7 @@ SENSORS: Final[tuple[HomeWizardSensorEntityDescription, ...]] = (
         state_class=SensorStateClass.TOTAL_INCREASING,
         has_fn=lambda data: data.measurement.energy_export_t4_kwh is not None,
         enabled_fn=lambda data: data.measurement.energy_export_t4_kwh != 0,
-        value_fn=lambda data: data.measurement.energy_export_t4_kwh,
+        value_fn=lambda data: data.measurement.energy_export_t4_kwh or None,
     ),
     HomeWizardSensorEntityDescription(
         key="active_power_w",
@@ -621,7 +613,7 @@ SENSORS: Final[tuple[HomeWizardSensorEntityDescription, ...]] = (
     HomeWizardSensorEntityDescription(
         key="uptime",
         translation_key="uptime",
-        device_class=SensorDeviceClass.TIMESTAMP,
+        device_class=SensorDeviceClass.UPTIME,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
         has_fn=(
@@ -637,6 +629,13 @@ SENSORS: Final[tuple[HomeWizardSensorEntityDescription, ...]] = (
     ),
 )
 
+
+# The API reports units in ASCII; Home Assistant expects its own spelling.
+_EXTERNAL_UNITS: Final[dict[str, str]] = {
+    "m3": UnitOfVolume.CUBIC_METERS,
+    "l": UnitOfVolume.LITERS,
+    "L": UnitOfVolume.LITERS,
+}
 
 EXTERNAL_SENSORS = {
     ExternalDevice.DeviceType.GAS_METER: HomeWizardExternalSensorEntityDescription(
@@ -708,11 +707,13 @@ async def async_setup_entry(
                 continue
             if external := EXTERNAL_SENSORS.get(device.type):
                 known_external.add(unique_id)
-                fresh.append(
-                    HomeWizardExternalSensorEntity(
-                        coordinator, external, unique_id, parent_id
-                    )
+                entity = HomeWizardExternalSensorEntity(
+                    coordinator, external, unique_id, parent_id
                 )
+                # A meter whose device the user deleted gets entities again
+                # when the P1 meter reports it later.
+                entity.async_on_remove(partial(known_external.discard, unique_id))
+                fresh.append(entity)
         return fresh
 
     @callback
@@ -741,6 +742,7 @@ class HomeWizardSensorEntity(HomeWizardEntity, SensorEntity):
         self._uptime_system: System | None = None
         self._uptime_value: StateType | datetime | None = None
         if description.key == "uptime":
+            self._attr_uptime_drift_tolerance = _UPTIME_DRIFT_TOLERANCE
             self._uptime_system = coordinator.data.system
             self._uptime_value = description.value_fn(coordinator.data)
         self._attr_unique_id = f"{coordinator.config_entry.unique_id}_{description.key}"
@@ -758,20 +760,12 @@ class HomeWizardSensorEntity(HomeWizardEntity, SensorEntity):
         """Recompute boot time only when a new system snapshot arrives.
 
         Measurement pushes reuse the system snapshot. Its uptime must not be
-        interpreted relative to a later wall clock on every push, and small
-        drifts inside a five-minute window keep the previous boot time.
+        interpreted relative to a later wall clock on every push.
         """
         if self.coordinator.data.system is self._uptime_system:
             return
         self._uptime_system = self.coordinator.data.system
-        computed = self.entity_description.value_fn(self.coordinator.data)
-        if (
-            isinstance(computed, datetime)
-            and isinstance(self._uptime_value, datetime)
-            and abs(computed - self._uptime_value) < _UPTIME_VARIANCE
-        ):
-            return
-        self._uptime_value = computed
+        self._uptime_value = self.entity_description.value_fn(self.coordinator.data)
 
     @property
     def native_value(self) -> StateType | datetime | None:
@@ -811,19 +805,10 @@ class HomeWizardExternalSensorEntity(HomeWizardEntity, SensorEntity):
             identifiers={(DOMAIN, f"{DOMAIN}_{device_unique_id}")},
             name=description.device_name,
             manufacturer="HomeWizard",
-            model=coordinator.data.device.product_type,
             serial_number=device_unique_id,
         )
         if via_device_id is not None:
-            # Home Assistant 2026 names the parent by registry id. 2025.10
-            # still links it with the (domain, identifier) tuple.
-            if "via_device_id" in DeviceInfo.__annotations__:
-                self._attr_device_info["via_device_id"] = via_device_id  # type: ignore[typeddict-unknown-key]
-            elif coordinator.data.device.serial is not None:
-                self._attr_device_info["via_device"] = (
-                    DOMAIN,
-                    f"{DOMAIN}_{coordinator.data.device.serial}",
-                )
+            self._attr_device_info["via_device_id"] = via_device_id
 
     @property
     def native_value(self) -> float | int | str | None:
@@ -850,11 +835,7 @@ class HomeWizardExternalSensorEntity(HomeWizardEntity, SensorEntity):
         if (device := self.device) is None:
             return None
 
-        # API returns 'm3' but we expect m³
-        if device.unit == "m3":
-            return UnitOfVolume.CUBIC_METERS
-
-        return device.unit
+        return _EXTERNAL_UNITS.get(device.unit, device.unit)
 
     @property
     def device_class(self) -> SensorDeviceClass | None:

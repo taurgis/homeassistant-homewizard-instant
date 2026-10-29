@@ -41,10 +41,10 @@ curl -s -X POST http://127.0.0.1:8082/button   # 1-phase meter
 curl -s -X POST http://127.0.0.1:8081/button   # 3-phase meter
 ```
 
-The documented minimum is Home Assistant 2025.10 on Python 3.13. Use that image with:
+The documented minimum is Home Assistant 2026.8 on Python 3.14. Use that image with:
 
 ```bash
-HA_IMAGE_TAG=2025.10.4 docker compose up -d
+HA_IMAGE_TAG=2026.8.0 docker compose up -d
 ```
 
 Stop the lab with `docker compose down`. Add `-v` to drop the CA volume and the Home Assistant config directory if you want a clean start (`rm -rf ha_config` as well).
@@ -78,6 +78,7 @@ Faults, posted as `{"name":"<fault>"}`:
 | `out_of_range` | Pushes impossible power, voltage, frequency and tariff. |
 | `identity_change` | Reports serial `ffffffffffff`. |
 | `slow` | Pushes about every 12 seconds (`interval` overrides). |
+| `silent` | Stops pushing measurements, as if the P1 cable were unplugged. A new subscription gets the last reading again, unchanged. |
 | `restart` | Restarts the HTTPS server. |
 | `tls_change` | Restarts HTTPS with a certificate the lab CA did not sign. |
 
@@ -102,6 +103,6 @@ python3 -m mypy --strict custom_components/homewizard_instant/
 pytest tests/ -q --cov=custom_components/homewizard_instant --cov-fail-under=95
 ```
 
-Use Python 3.13 for those commands. CI does.
+Use Python 3.14 for those commands. CI does.
 
 `tools/dev/exercise_ha.py` signs in as `dev` / `devpass1` and walks the pairing and fault checks against a lab that is already up. `tools/dev/exercise_rest.py` continues from an entry that is already paired.

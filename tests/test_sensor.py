@@ -103,15 +103,15 @@ async def test_external_sensor_unit_and_device_class(
         coordinator, description, "gas123", via_device_id="parent-device"
     )
     assert external.device_info is not None
-    if "via_device_id" in external.device_info:
-        assert external.device_info["via_device_id"] == "parent-device"
-    else:
-        assert external.device_info["via_device"] == (
-            "homewizard_instant",
-            "homewizard_instant_SERIAL123",
-        )
+    assert external.device_info["via_device_id"] == "parent-device"
+    # The meter type is the sensor name; it is not a hardware model.
+    assert "model" not in external.device_info
 
     assert external.native_unit_of_measurement == UnitOfVolume.CUBIC_METERS
+    assert external.device_class == SensorDeviceClass.GAS
+
+    coordinator.data.measurement.external_devices["gas123"].unit = "l"
+    assert external.native_unit_of_measurement == UnitOfVolume.LITERS
     assert external.device_class == SensorDeviceClass.GAS
 
     coordinator.data.measurement.external_devices["gas123"].unit = "invalid"
@@ -208,6 +208,8 @@ async def test_external_meter_added_after_setup(
     hass, mock_config_entry, mock_combined_data
 ):
     """A utility meter that shows up later still gets an entity."""
+    from dataclasses import replace
+
     from homewizard_energy.models import ExternalDevice
 
     mock_config_entry.add_to_hass(hass)
@@ -232,11 +234,19 @@ async def test_external_meter_added_after_setup(
     )
     coordinator.async_set_updated_data(mock_combined_data)
     assert len(added) == before + 1
+    water = added[-1]
+    assert getattr(water, "_device_id", None) == "water1"
+
+    # Deleting the meter's device removes its entity; a later report adds it back.
+    for remove in water._on_remove:
+        remove()
+    coordinator.async_set_updated_data(replace(mock_combined_data))
+    assert len(added) == before + 2
     assert getattr(added[-1], "_device_id", None) == "water1"
 
 
-async def test_zero_energy_stays_available(hass, mock_config_entry, mock_combined_data):
-    """A reading of 0 kWh is a real total, not a missing value."""
+async def test_zero_energy_is_unavailable(hass, mock_config_entry, mock_combined_data):
+    """A glitched 0 kWh total would be recorded as a meter reset and a spike."""
     coordinator = HWEnergyDeviceUpdateCoordinator(hass, mock_config_entry, AsyncMock())
     coordinator.data = mock_combined_data
     coordinator.last_update_success = True
@@ -244,26 +254,28 @@ async def test_zero_energy_stays_available(hass, mock_config_entry, mock_combine
     coordinator.data.measurement.energy_export_kwh = 0
     description = next(item for item in SENSORS if item.key == "total_power_import_kwh")
     entity = HomeWizardSensorEntity(coordinator, description)
-    assert entity.native_value == 0
-    assert entity.available is True
+    assert entity.native_value is None
+    assert entity.available is False
 
 
-async def test_uptime_jitter_stays_on_the_entity(hass, mock_config_entry, mock_combined_data, freezer):
-    """A small uptime correction must not move the estimated boot time."""
-    from dataclasses import replace
-    from datetime import timedelta
+async def test_uptime_jitter_is_left_to_home_assistant(
+    hass, mock_config_entry, mock_combined_data
+):
+    """HA's uptime device class keeps the boot time through small corrections."""
+    from homeassistant.components.sensor import SensorDeviceClass
 
     coordinator = HWEnergyDeviceUpdateCoordinator(hass, mock_config_entry, AsyncMock())
     coordinator.data = mock_combined_data
     sensor = HomeWizardSensorEntity(
         coordinator, next(item for item in SENSORS if item.key == "uptime")
     )
-    initial = sensor.native_value
-    freezer.tick(timedelta(seconds=30))
-    coordinator.data = replace(
-        mock_combined_data, system=replace(mock_combined_data.system, uptime_s=3610)
-    )
-    assert sensor.native_value == initial
+    assert sensor.device_class is SensorDeviceClass.UPTIME
+    assert sensor._attr_uptime_drift_tolerance == 300
+    first = sensor._normalize_uptime(sensor.native_value)
+    from datetime import timedelta
+
+    assert sensor._normalize_uptime(first + timedelta(seconds=90)) == first
+    assert sensor._normalize_uptime(first + timedelta(hours=1)) > first
 
 
 async def test_uptime_is_tracked_per_meter(hass, mock_config_entry, mock_combined_data):

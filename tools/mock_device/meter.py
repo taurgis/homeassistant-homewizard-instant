@@ -32,6 +32,7 @@ FAULT_NAMES = (
     "out_of_range",
     "identity_change",
     "slow",
+    "silent",
     "restart",
     "tls_change",
 )
@@ -51,6 +52,7 @@ class Faults:
     wrong_types: bool = False
     out_of_range: bool = False
     identity_change: bool = False
+    silent: bool = False
     slow_interval: float | None = None
     tls_untrusted: bool = False
 
@@ -255,6 +257,9 @@ class Meter:
         if topic == "device":
             return self.device_payload()
         if topic == "measurement":
+            if self.faults.silent and self.last_measurement:
+                # A meter that lost the smart meter replays its last reading.
+                return copy.deepcopy(self.last_measurement)
             return self.measurement_payload()
         if topic == "system":
             return self.system_payload()

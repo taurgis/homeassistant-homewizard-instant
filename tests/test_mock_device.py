@@ -63,6 +63,10 @@ def test_button_then_token_and_fault_payloads() -> None:
     meter.clear_faults()
     meter.apply_fault("identity_change")
     assert meter.device_payload()["serial"] != meter.serial
+    meter.clear_faults()
+    last = meter.topic_payload("measurement")
+    meter.apply_fault("silent")
+    assert meter.topic_payload("measurement") == last
     first = body["token"]
     status, body = meter.issue_token("local/homewizard-instant#abcdef123456")
     assert status == 200

@@ -250,7 +250,7 @@ class MeterServer:
                 elif fault is not None:
                     await socket.send_json(fault)
                     self.meter.pushes += 1
-                elif "measurement" in subscribed:
+                elif "measurement" in subscribed and not self.meter.faults.silent:
                     await self._send_topic(socket, "measurement")
             except (ConnectionResetError, RuntimeError):
                 return

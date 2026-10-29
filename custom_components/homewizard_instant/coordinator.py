@@ -50,6 +50,12 @@ def _communication_error(err: BaseException) -> UpdateFailed:
     )
 
 
+def _token_rejected() -> ConfigEntryAuthFailed:
+    return ConfigEntryAuthFailed(
+        translation_domain=DOMAIN, translation_key="token_rejected"
+    )
+
+
 class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[CombinedModels]):
     """Publish device snapshots without scheduled polling."""
 
@@ -66,6 +72,7 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[CombinedModels]):
         self._task: asyncio.Task[None] | None = None
         self._unsubs: list[Callable[[], None]] = []
         self._stale = False
+        self._connected_at = time.monotonic()
 
     async def _async_update_data(self) -> CombinedModels:
         """Connect initially; subsequent refresh requests use cached push data."""
@@ -78,7 +85,7 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[CombinedModels]):
         try:
             return await self.api.connect()
         except UnauthorizedError as err:
-            raise ConfigEntryAuthFailed from err
+            raise _token_rejected() from err
         except CONNECTION_ERRORS as err:
             # Home Assistant logs setup retries itself; the reason travels in
             # the translated message.
@@ -108,7 +115,9 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[CombinedModels]):
         """Mark entities unavailable when measurements stop arriving."""
         if self._stale or not self.last_update_success:
             return
-        silent = time.monotonic() - self.api.last_measurement
+        # A fresh connection gets the full window before the replayed
+        # snapshot counts as silence.
+        silent = time.monotonic() - max(self.api.last_measurement, self._connected_at)
         if silent < STALE_AFTER.total_seconds():
             return
         self._stale = True
@@ -116,14 +125,14 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[CombinedModels]):
             "No HomeWizard measurement received for %d s; marking sensors unavailable",
             silent,
         )
-        self._async_set_unavailable(
-            UpdateFailed(
-                translation_domain=DOMAIN,
-                translation_key="stale_data",
-                translation_placeholders={
-                    "seconds": str(int(STALE_AFTER.total_seconds()))
-                },
-            )
+        self._async_set_unavailable(self._stale_error())
+
+    @staticmethod
+    def _stale_error() -> UpdateFailed:
+        return UpdateFailed(
+            translation_domain=DOMAIN,
+            translation_key="stale_data",
+            translation_placeholders={"seconds": str(int(STALE_AFTER.total_seconds()))},
         )
 
     @callback
@@ -141,7 +150,12 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[CombinedModels]):
     def _async_publish(self, data: CombinedModels) -> None:
         """Forward a snapshot, skipping pushes that change nothing."""
         if self._stale:
-            if data.measurement is self.data.measurement:
+            if (
+                time.monotonic() - self.api.last_measurement
+                >= STALE_AFTER.total_seconds()
+            ):
+                # Still silent, including the snapshot replayed on reconnect.
+                self._async_set_unavailable(self._stale_error())
                 return
             self._stale = False
             LOGGER.info("HomeWizard measurements resumed")
@@ -168,40 +182,45 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[CombinedModels]):
     async def _listen(self) -> None:
         delay = 1
         connected = True
-        connected_at = time.monotonic()
+        self._connected_at = time.monotonic()
         try:
             while True:
                 try:
                     if not connected:
                         data = await self.api.connect()
                         connected = True
-                        connected_at = time.monotonic()
-                        self._stale = False
+                        self._connected_at = time.monotonic()
                         LOGGER.info("HomeWizard WebSocket reconnected")
                         self._async_publish(data)
                     self._async_publish(await self.api.receive())
                 except UnauthorizedError as err:
                     LOGGER.warning("HomeWizard token was rejected: %s", err)
-                    self._async_set_unavailable(ConfigEntryAuthFailed("Token rejected"))
+                    self._async_set_unavailable(_token_rejected())
                     self.config_entry.async_start_reauth(self.hass)
                     return
                 except Exception as err:  # noqa: BLE001 - keep the reader alive
-                    if connected and time.monotonic() - connected_at >= _STABLE_AFTER:
+                    was_connected = connected
+                    if (
+                        connected
+                        and time.monotonic() - self._connected_at >= _STABLE_AFTER
+                    ):
                         delay = 1
                     connected = False
                     await self._async_connection_lost(
-                        err, delay, unexpected=not isinstance(err, CONNECTION_ERRORS)
+                        err,
+                        delay,
+                        was_connected=was_connected,
+                        unexpected=not isinstance(err, CONNECTION_ERRORS),
                     )
                     delay = min(delay * 2, _MAX_DELAY)
         finally:
             await self.api.close()
 
     async def _async_connection_lost(
-        self, err: Exception, delay: int, *, unexpected: bool
+        self, err: Exception, delay: int, *, was_connected: bool, unexpected: bool
     ) -> None:
         """Log once per outage, mark entities unavailable, then back off."""
-        if self.last_update_success or self._stale:
-            self._stale = False
+        if was_connected:
             if unexpected:
                 LOGGER.exception(
                     "Unexpected HomeWizard WebSocket error; reconnecting in %s s",

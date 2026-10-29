@@ -81,7 +81,7 @@ def _without_meter_ids(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
-def _describe_error(err: Exception | None, ip_address: str | None) -> Any:
+def _describe_error(err: BaseException | None, ip_address: str | None) -> Any:
     """Keep the failure reason, which aiohttp prefixes with the host address."""
     if err is None:
         return None

@@ -7,8 +7,9 @@ from custom_components.homewizard_instant import async_setup_entry, async_unload
 
 
 async def test_legacy_entry_requires_pairing(hass, mock_config_entry):
-    with pytest.raises(ConfigEntryAuthFailed):
+    with pytest.raises(ConfigEntryAuthFailed) as err:
         await async_setup_entry(hass, mock_config_entry)
+    assert err.value.translation_key == "pairing_required"
 
 
 @pytest.mark.parametrize("failure", [None, ConfigEntryNotReady, ConfigEntryAuthFailed])

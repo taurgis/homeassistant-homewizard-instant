@@ -18,7 +18,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomeWizardConfigEntry) -
     if not all(
         entry.data.get(key) for key in (CONF_TOKEN, CONF_PRODUCT_TYPE, CONF_SERIAL)
     ):
-        raise ConfigEntryAuthFailed("Pair this P1 meter with API v2")
+        raise ConfigEntryAuthFailed(
+            translation_domain=DOMAIN, translation_key="pairing_required"
+        )
     api = HomeWizardWebSocket(
         async_get_clientsession(hass),
         entry.data[CONF_IP_ADDRESS],
