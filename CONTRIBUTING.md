@@ -16,6 +16,10 @@ python3 -m pip install -r requirements_test.txt
 npm install
 ```
 
+## Live Home Assistant
+
+`docs/development.md` describes the Docker lab: Home Assistant plus two emulated API v2 P1 meters. From `.devcontainer`, run `docker compose up -d --build`.
+
 ## Verification
 
 Run these before opening a PR:

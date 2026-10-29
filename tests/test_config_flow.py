@@ -66,6 +66,19 @@ async def test_connect_success(hass):
     api.close.assert_awaited_once()
 
 
+async def test_token_request_unauthorized(hass):
+    api = AsyncMock()
+    api.get_token.side_effect = UnauthorizedError()
+    with (
+        patch(PREFIX + "HomeWizardEnergyV2", return_value=api),
+        patch(PREFIX + "instance_id.async_get", return_value="abcdef1234567890"),
+    ):
+        with pytest.raises(RecoverableError) as err:
+            await async_request_token(hass, "1.2.3.4")
+    assert err.value.error_code == "invalid_auth"
+    api.close.assert_awaited_once()
+
+
 @pytest.mark.parametrize("blocked", [False, True])
 async def test_token_request(hass, blocked):
     api = AsyncMock()

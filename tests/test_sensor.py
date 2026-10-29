@@ -99,7 +99,17 @@ async def test_external_sensor_unit_and_device_class(
         coordinator.data.measurement.external_devices["gas123"].type
     ]
 
-    external = HomeWizardExternalSensorEntity(coordinator, description, "gas123")
+    external = HomeWizardExternalSensorEntity(
+        coordinator, description, "gas123", via_device_id="parent-device"
+    )
+    assert external.device_info is not None
+    if "via_device_id" in external.device_info:
+        assert external.device_info["via_device_id"] == "parent-device"
+    else:
+        assert external.device_info["via_device"] == (
+            "homewizard_instant",
+            "homewizard_instant_SERIAL123",
+        )
 
     assert external.native_unit_of_measurement == UnitOfVolume.CUBIC_METERS
     assert external.device_class == SensorDeviceClass.GAS
@@ -192,6 +202,54 @@ async def test_import_tariff_t1_sensor_does_not_depend_on_export_t2(
         and entity.entity_description.key == "total_power_import_t1_kwh"
         for entity in added
     )
+
+
+async def test_zero_energy_stays_available(hass, mock_config_entry, mock_combined_data):
+    """A reading of 0 kWh is a real total, not a missing value."""
+    coordinator = HWEnergyDeviceUpdateCoordinator(hass, mock_config_entry, AsyncMock())
+    coordinator.data = mock_combined_data
+    coordinator.last_update_success = True
+    coordinator.data.measurement.energy_import_kwh = 0
+    coordinator.data.measurement.energy_export_kwh = 0
+    description = next(item for item in SENSORS if item.key == "total_power_import_kwh")
+    entity = HomeWizardSensorEntity(coordinator, description)
+    assert entity.native_value == 0
+    assert entity.available is True
+
+
+async def test_uptime_jitter_stays_on_the_entity(hass, mock_config_entry, mock_combined_data, freezer):
+    """A small uptime correction must not move the estimated boot time."""
+    from dataclasses import replace
+    from datetime import timedelta
+
+    coordinator = HWEnergyDeviceUpdateCoordinator(hass, mock_config_entry, AsyncMock())
+    coordinator.data = mock_combined_data
+    sensor = HomeWizardSensorEntity(
+        coordinator, next(item for item in SENSORS if item.key == "uptime")
+    )
+    initial = sensor.native_value
+    freezer.tick(timedelta(seconds=30))
+    coordinator.data = replace(
+        mock_combined_data, system=replace(mock_combined_data.system, uptime_s=3610)
+    )
+    assert sensor.native_value == initial
+
+
+async def test_uptime_is_tracked_per_meter(hass, mock_config_entry, mock_combined_data):
+    """Two meters must not share one boot-time estimate."""
+    from dataclasses import replace
+    from datetime import timedelta
+
+    first = HWEnergyDeviceUpdateCoordinator(hass, mock_config_entry, AsyncMock())
+    second = HWEnergyDeviceUpdateCoordinator(hass, mock_config_entry, AsyncMock())
+    first.data = mock_combined_data
+    second.data = replace(
+        mock_combined_data, system=replace(mock_combined_data.system, uptime_s=3660)
+    )
+    description = next(item for item in SENSORS if item.key == "uptime")
+    older = HomeWizardSensorEntity(first, description)
+    newer_boot = HomeWizardSensorEntity(second, description)
+    assert newer_boot.native_value == older.native_value - timedelta(seconds=60)
 
 
 async def test_uptime_does_not_drift_on_measurement_push(
