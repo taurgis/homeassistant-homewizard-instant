@@ -150,8 +150,24 @@ async def test_socket_waits_for_subscribe_and_auth_timeout() -> None:
 
 
 def _certificate_text(cert: Path) -> str:
+    """Return the subject in RFC2253 form, which does not depend on OpenSSL's default spacing.
+
+    OpenSSL 3.0 prints ``CN = name``. OpenSSL 3.2 and later print ``CN=name``.
+    ``-nameopt RFC2253`` is the same string on both.
+    """
     completed = subprocess.run(
-        ["openssl", "x509", "-in", str(cert), "-noout", "-subject", "-ext", "subjectAltName"],
+        [
+            "openssl",
+            "x509",
+            "-in",
+            str(cert),
+            "-noout",
+            "-subject",
+            "-nameopt",
+            "RFC2253",
+            "-ext",
+            "subjectAltName",
+        ],
         check=False,
         capture_output=True,
         text=True,
@@ -207,7 +223,7 @@ def test_device_certificate_matches_a_real_p1_meter(tmp_path: Path) -> None:
     serial = "aabbccddeeff"
     cert, key = issue_cert(ca_cert, ca_key, serial, tmp_path / "leaf")
     text = _certificate_text(cert)
-    assert f"CN = {hostname(serial)}" in text
+    assert f"CN={hostname(serial)}" in text
     assert "Subject Alternative Name" not in text
     assert "DNS:" not in text
     _handshake(cert, key, ca_cert, hostname(serial))
