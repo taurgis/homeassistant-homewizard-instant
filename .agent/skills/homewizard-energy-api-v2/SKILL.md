@@ -5,10 +5,10 @@ description: How this integration talks to HomeWizard P1 meters over the authent
 
 # HomeWizard Energy API v2 (WebSocket + python-homewizard-energy)
 
-The integration uses two transports, both TLS-verified against HomeWizard's appliance CA and the meter's identity (`appliance/p1dongle/<serial>`):
+The integration uses two transports. Both verify the certificate chain against HomeWizard's appliance CA. Neither pins the TLS hostname (`appliance/p1dongle/<serial>`). Real meters have been seen with that name only in the common name and with no subjectAltName, and some certificates do not verify as that hostname at all. Identity is the serial from the device payload, compared case-insensitively with the config-entry unique id. Passing `identifier` to `HomeWizardEnergyV2` turns a certificate mismatch into a failed handshake; do not pass it. The official Home Assistant integration constructs `HomeWizardEnergyV2(ip, token=token)`.
 
 - **REST via `homewizard_energy.HomeWizardEnergyV2`**: pairing, identity checks and token revocation, all in `config_flow.py`.
-- **WebSocket via `websocket.HomeWizardWebSocket`**: one `wss://<host>/api/ws` connection that authenticates with the token and subscribes to `device`, `measurement` and `system`. The library's models (`Device`, `Measurement`, `System`) parse each frame.
+- **WebSocket via `websocket.HomeWizardWebSocket`**: one `wss://<host>/api/ws` connection that authenticates with the token and subscribes to `device`, `measurement` and `system`. The library's models (`Device`, `Measurement`, `System`) parse each frame. The socket context has `check_hostname` off and `CERT_REQUIRED` on. A `device` frame whose serial does not match the entry, ignoring case, closes the stream.
 
 ## When to Use
 

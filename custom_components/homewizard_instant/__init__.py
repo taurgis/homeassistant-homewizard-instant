@@ -5,7 +5,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homewizard_energy.models import get_verification_hostname
 
 from .config_flow import async_revoke_token
 from .const import CONF_PRODUCT_TYPE, CONF_SERIAL, DOMAIN, PLATFORMS
@@ -25,9 +24,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomeWizardConfigEntry) -
         async_get_clientsession(hass),
         entry.data[CONF_IP_ADDRESS],
         entry.data[CONF_TOKEN],
-        get_verification_hostname(
-            entry.data[CONF_PRODUCT_TYPE], entry.data[CONF_SERIAL]
-        ),
+        entry.data[CONF_SERIAL],
         await hass.async_add_executor_job(create_ssl_context),
     )
     coordinator = HWEnergyDeviceUpdateCoordinator(hass, entry, api)
@@ -51,13 +48,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: HomeWizardConfigEntry) 
 async def async_remove_entry(hass: HomeAssistant, entry: HomeWizardConfigEntry) -> None:
     """Revoke the pairing token so it does not linger on the meter."""
     if token := entry.data.get(CONF_TOKEN):
-        await async_revoke_token(
-            hass,
-            entry.data[CONF_IP_ADDRESS],
-            token,
-            product_type=entry.data.get(CONF_PRODUCT_TYPE),
-            serial=entry.data.get(CONF_SERIAL),
-        )
+        await async_revoke_token(hass, entry.data[CONF_IP_ADDRESS], token)
 
 
 async def async_remove_config_entry_device(

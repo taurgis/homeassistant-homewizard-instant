@@ -71,9 +71,7 @@ async def test_remove_revokes_token(hass, mock_config_entry, token):
     ) as revoke:
         await async_remove_entry(hass, mock_config_entry)
     if token:
-        revoke.assert_awaited_once_with(
-            hass, "1.2.3.4", token, product_type="HWE-P1", serial="aabbccddeeff"
-        )
+        revoke.assert_awaited_once_with(hass, "1.2.3.4", token)
     else:
         revoke.assert_not_called()
 

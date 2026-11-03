@@ -170,11 +170,19 @@ def trust_development_ca() -> None:
 
 
 def create_ssl_context() -> ssl.SSLContext:
-    """Trust the HomeWizard CA and verify the device certificate identity."""
+    """Trust the HomeWizard appliance CA and leave the hostname unchecked.
+
+    Identity is the serial carried by the device topic. Real P1 certificates
+    use a common name of ``appliance/p1dongle/<serial>`` with no
+    subjectAltName, and some meters present a name that does not verify as
+    that hostname. The official integration checks the CA chain, then the
+    serial from the device.
+    """
     trust_development_ca()
     context = ssl.create_default_context(cadata=CACERT)
     context.verify_flags = ssl.VERIFY_X509_PARTIAL_CHAIN
-    context.hostname_checks_common_name = True
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_REQUIRED
     return context
 
 
@@ -262,13 +270,13 @@ class HomeWizardWebSocket:
         session: ClientSession,
         host: str,
         token: str,
-        identifier: str,
+        serial: str,
         context: ssl.SSLContext,
     ) -> None:
         self._session = session
         self._url = URL.build(scheme="wss", host=host, path="/api/ws")
         self._token = token
-        self._identifier = identifier
+        self._serial = serial
         self._context = context
         self._socket: ClientWebSocketResponse | None = None
         self._ready = False
@@ -290,7 +298,6 @@ class HomeWizardWebSocket:
                 self._socket = await self._session.ws_connect(
                     self._url,
                     ssl=self._context,
-                    server_hostname=self._identifier,
                     heartbeat=30,
                     headers={"X-Api-Version": "2"},
                 )
@@ -403,8 +410,11 @@ class HomeWizardWebSocket:
                 device = _parse(Device, data, problems)
                 if not device.serial:
                     raise ValueError("device message without serial")
-                if device.id != self._identifier:
-                    raise RequestError("WebSocket device identity changed")
+                if device.serial.casefold() != self._serial.casefold():
+                    raise RequestError(
+                        "WebSocket device identity changed from "
+                        f"{self._serial} to {device.serial}"
+                    )
                 self._topics[topic] = device
             elif topic == "measurement":
                 measurement = _parse(Measurement, data, problems)

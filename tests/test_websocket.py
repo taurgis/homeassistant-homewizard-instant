@@ -25,7 +25,7 @@ def frame(kind, data=None):
     return WSMessage(WSMsgType.TEXT, json.dumps({"type": kind, "data": data}), None)
 
 
-def client(frames):
+def client(frames, serial: str = "aabbccddeeff"):
     socket = AsyncMock()
     socket.receive.side_effect = frames
     session = Mock()
@@ -34,7 +34,7 @@ def client(frames):
         session,
         "192.168.1.2",
         "secret",
-        "appliance/p1dongle/aabbccddeeff",
+        serial,
         create_ssl_context(),
     )
     return transport, session, socket
@@ -70,7 +70,8 @@ async def test_handshake_and_snapshots():
     assert second.system == first.system
     kwargs = session.ws_connect.call_args.kwargs
     assert kwargs["ssl"].verify_mode == ssl.CERT_REQUIRED
-    assert kwargs["server_hostname"] == "appliance/p1dongle/aabbccddeeff"
+    assert kwargs["ssl"].check_hostname is False
+    assert kwargs.get("server_hostname") is None
     await api.close()
     socket.close.assert_awaited_once()
 
@@ -334,7 +335,7 @@ async def test_websocket_handshake_status(status, error):
         session,
         "192.0.2.1",
         "secret",
-        "appliance/p1dongle/aabbccddeeff",
+        "aabbccddeeff",
         create_ssl_context(),
     )
     with pytest.raises(error):
@@ -401,9 +402,17 @@ async def test_wrong_identity():
     frames = initial()
     frames[3] = frame("device", {**DEVICE, "serial": "other"})
     api, _, socket = client(frames)
-    with pytest.raises(RequestError):
+    with pytest.raises(RequestError, match="identity changed from aabbccddeeff to other"):
         await api.connect()
     socket.close.assert_awaited_once()
+
+
+async def test_serial_case_matches():
+    """The device topic serial is compared without regard to letter case."""
+    api, _, _socket = client(initial(), serial="AABBCCDDEEFF")
+    data = await api.connect()
+    assert data.device.serial == "aabbccddeeff"
+    await api.close()
 
 
 async def test_request_reads_a_topic_once_connected():

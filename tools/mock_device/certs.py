@@ -1,8 +1,15 @@
 """Development CA and device certificates for the emulated P1 meter.
 
-The vendor HomeWizard CA private key is not public. These certificates follow
-the same shape the real meter uses: a private CA and a leaf whose common name
-and DNS SAN are ``appliance/p1dongle/<serial>``.
+The vendor HomeWizard CA private key is not public. The leaf follows a real
+P1 meter: common name ``appliance/p1dongle/<serial>`` and no subjectAltName.
+That shape is what the API documentation tells clients to verify, and it is
+what a P1 dongle presented in HomeWizard's API discussion 214
+(``CN=appliance/p1dongle/<serial>``, empty subjectAltNames).
+
+Some meters instead put only the serial in the common name. Hostname pinning
+rejects those certificates. This integration verifies the CA chain and then
+the serial from the device, which is what the official Home Assistant
+integration does.
 """
 
 from __future__ import annotations
@@ -36,7 +43,6 @@ _LEAF_EXT = """
 basicConstraints = CA:FALSE
 keyUsage = digitalSignature,keyEncipherment
 extendedKeyUsage = serverAuth
-subjectAltName = DNS:{hostname}
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid,issuer
 """
@@ -50,7 +56,7 @@ def _openssl(args: list[str]) -> None:
 
 
 def hostname(serial: str) -> str:
-    """Return the TLS identity HomeWizard uses for a P1 meter."""
+    """Return the TLS name documented for a P1 meter."""
     return f"appliance/p1dongle/{serial}"
 
 
@@ -91,17 +97,23 @@ def issue_cert(
     directory: Path,
     *,
     name: str = "device",
+    common_name: str | None = None,
 ) -> tuple[Path, Path]:
-    """Sign a leaf certificate for this meter's appliance hostname."""
+    """Sign a leaf the way a P1 meter does: common name, no subjectAltName.
+
+    ``common_name`` overrides the documented appliance name. Tests use that
+    to reproduce meters whose certificate does not verify as
+    ``appliance/p1dongle/<serial>``.
+    """
     directory.mkdir(parents=True, exist_ok=True)
-    identity = hostname(serial)
+    identity = common_name or hostname(serial)
     leaf_config = directory / f"{name}.cnf"
     ext_config = directory / f"{name}.ext"
     csr = directory / f"{name}.csr"
     cert = directory / f"{name}.pem"
     key = directory / f"{name}.key"
     leaf_config.write_text(_LEAF_CONFIG.format(hostname=identity), encoding="utf-8")
-    ext_config.write_text(_LEAF_EXT.format(hostname=identity), encoding="utf-8")
+    ext_config.write_text(_LEAF_EXT, encoding="utf-8")
     _openssl(
         [
             "openssl",
