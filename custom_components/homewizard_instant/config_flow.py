@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import voluptuous as vol
-from aiohttp import ClientConnectorCertificateError, ClientSession
+from aiohttp import ClientSession
 from homeassistant.config_entries import SOURCE_USER, ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_IP_ADDRESS, CONF_TOKEN
 from homeassistant.core import HomeAssistant
@@ -28,7 +28,7 @@ from homewizard_energy.errors import (
     UnauthorizedError,
     UnsupportedError,
 )
-from homewizard_energy.models import Device, get_verification_hostname
+from homewizard_energy.models import Device
 
 from .const import CONF_PRODUCT_NAME, CONF_PRODUCT_TYPE, CONF_SERIAL, DOMAIN, LOGGER
 from .websocket import trust_development_ca
@@ -47,28 +47,53 @@ def identity_from_unique_id(unique_id: str | None) -> tuple[str | None, str | No
     return product_type, serial
 
 
-def pinned_identity(
-    product_type: str | None,
-    serial: str | None,
-    unique_id: str | None,
-) -> tuple[str | None, str | None]:
-    """Prefer the unique id; it is the identity reauth and DHCP compare."""
-    parsed_type, parsed_serial = identity_from_unique_id(unique_id)
-    if parsed_type and parsed_serial:
-        return parsed_type, parsed_serial
-    if product_type and serial:
-        return product_type, serial
-    return None, None
+def same_meter(unique_id: str | None, product_type: str, serial: str) -> bool:
+    """Return True when the stored unique id is this meter, ignoring case."""
+    expected_type, expected_serial = identity_from_unique_id(unique_id)
+    if expected_type is None or expected_serial is None:
+        return False
+    return (
+        expected_type.casefold() == product_type.casefold()
+        and expected_serial.casefold() == serial.casefold()
+    )
 
 
-def verification_hostname(product_type: str | None, serial: str | None) -> str | None:
-    """Return the TLS hostname, or None when the device is not known yet."""
-    if not product_type or not serial:
-        return None
-    try:
-        return get_verification_hostname(product_type, serial)
-    except ValueError:
-        return None
+def _cause_chain(err: BaseException) -> str:
+    """Return the exception and its causes without a traceback."""
+    parts: list[str] = []
+    current: BaseException | None = err
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        text = str(current).strip() or type(current).__name__
+        parts.append(f"{type(current).__name__}: {text}")
+        current = current.__cause__
+    return "; caused by ".join(parts)
+
+
+def _recover(step: str, err: Exception, code: str, message: str) -> RecoverableError:
+    """Log a pairing failure with its step and the underlying error class."""
+    LOGGER.warning(
+        "HomeWizard pairing step %s failed (%s): %s",
+        step,
+        type(err).__name__,
+        _cause_chain(err),
+    )
+    return RecoverableError(message, code)
+
+
+def _log_wrong_device(
+    step: str, host: str, expected: str | None, device: Device
+) -> None:
+    """Log a serial comparison that rejected the meter at this address."""
+    LOGGER.warning(
+        "HomeWizard pairing step %s at %s reported %s serial %s; expected unique id %s",
+        step,
+        host,
+        device.product_type,
+        device.serial,
+        expected,
+    )
 
 
 class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -92,6 +117,11 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
             if user_input[CONF_IP_ADDRESS] != self.ip_address:
                 self._token = None
             self.ip_address = user_input[CONF_IP_ADDRESS]
+            LOGGER.debug(
+                "HomeWizard config flow step user source=%s host=%s",
+                self.source,
+                self.ip_address,
+            )
             return await self.async_step_authorize()
         return self._show_user_form()
 
@@ -110,17 +140,17 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Request a token before prompting for the physical button press."""
         assert self.ip_address is not None
-        errors: dict[str, str] = {}
-        product_type, serial = pinned_identity(
-            self.product_type, self.serial, self.unique_id
+        step = f"{self.source}:authorize"
+        LOGGER.debug(
+            "HomeWizard config flow step %s host=%s",
+            step,
+            self.ip_address,
         )
+        errors: dict[str, str] = {}
         try:
             if self._token is None:
                 self._token = await async_request_token(
-                    self.hass,
-                    self.ip_address,
-                    product_type=product_type,
-                    serial=serial,
+                    self.hass, self.ip_address, step=step
                 )
             if self._token is None:
                 if user_input is not None:
@@ -130,33 +160,56 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
                     self.hass,
                     self.ip_address,
                     token=self._token,
-                    product_type=product_type,
-                    serial=serial,
+                    step=step,
                 )
                 if device.product_type != Model.P1_METER:
                     return await self._async_abort_and_revoke("device_not_supported")
                 if not device.serial:
                     return await self._async_abort_and_revoke("unknown_error")
-                unique_id = f"{DOMAIN}_{device.product_type}_{device.serial}"
+                if self.source == "reauth":
+                    entry = self._get_reauth_entry()
+                    if not same_meter(
+                        entry.unique_id, device.product_type, device.serial
+                    ):
+                        _log_wrong_device(step, self.ip_address, entry.unique_id, device)
+                        return await self._async_abort_and_revoke("wrong_device")
+                    LOGGER.debug(
+                        "HomeWizard pairing step %s accepted serial %s for unique id %s",
+                        step,
+                        device.serial,
+                        entry.unique_id,
+                    )
+                    return self.async_update_reload_and_abort(
+                        entry,
+                        data_updates=_entry_data(
+                            self.ip_address, self._token, device
+                        ),
+                    )
                 # Discovery must not silently pair with a different device at a reused IP.
-                if self.unique_id is not None and self.unique_id != unique_id:
+                if self.unique_id is not None and not same_meter(
+                    self.unique_id, device.product_type, device.serial
+                ):
+                    _log_wrong_device(
+                        step, self.ip_address, self.unique_id, device
+                    )
                     return await self._async_abort_and_revoke("wrong_device")
                 # A pending discovery card for this meter must not abort a
                 # manual setup after the button press; creating the entry
-                # dismisses that card.
-                await self.async_set_unique_id(unique_id, raise_on_progress=False)
-                data = {
-                    CONF_IP_ADDRESS: self.ip_address,
-                    CONF_TOKEN: self._token,
-                    CONF_PRODUCT_TYPE: device.product_type,
-                    CONF_SERIAL: device.serial,
-                }
-                if self.source == "reauth":
-                    if self._get_reauth_entry().unique_id != unique_id:
-                        return await self._async_abort_and_revoke("wrong_device")
-                    return self.async_update_reload_and_abort(
-                        self._get_reauth_entry(), data_updates=data
+                # dismisses that card. Keep the unique id already chosen so a
+                # v1 entry or discovery record is not rewritten when only the
+                # serial's letter case differs.
+                if self.unique_id is None:
+                    await self.async_set_unique_id(
+                        f"{DOMAIN}_{device.product_type}_{device.serial}",
+                        raise_on_progress=False,
                     )
+                LOGGER.debug(
+                    "HomeWizard pairing step %s accepted serial %s for unique id %s",
+                    step,
+                    device.serial,
+                    self.unique_id,
+                )
+                data = _entry_data(self.ip_address, self._token, device)
                 self._abort_if_unique_id_configured(updates=data)
                 return self.async_create_entry(title=device.product_name, data=data)
         except RecoverableError as err:
@@ -172,7 +225,7 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
         except AbortFlow:
             raise
         except Exception:  # noqa: BLE001
-            LOGGER.exception("Unexpected error while pairing the HomeWizard meter")
+            LOGGER.exception("Unexpected error in HomeWizard pairing step %s", step)
             errors["base"] = "unknown"
         return self.async_show_form(
             step_id="authorize",
@@ -183,16 +236,7 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
     async def _async_abort_and_revoke(self, reason: str) -> ConfigFlowResult:
         """Abort without leaving the new token behind on the device."""
         assert self.ip_address is not None and self._token is not None
-        product_type, serial = pinned_identity(
-            self.product_type, self.serial, self.unique_id
-        )
-        await async_revoke_token(
-            self.hass,
-            self.ip_address,
-            self._token,
-            product_type=product_type,
-            serial=serial,
-        )
+        await async_revoke_token(self.hass, self.ip_address, self._token)
         return self.async_abort(reason=reason)
 
     async def async_step_zeroconf(
@@ -211,6 +255,11 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
         self.product_name = properties[CONF_PRODUCT_NAME]
         self.product_type = properties[CONF_PRODUCT_TYPE]
         self.serial = properties[CONF_SERIAL]
+        LOGGER.debug(
+            "HomeWizard config flow step zeroconf host=%s serial=%s",
+            self.ip_address,
+            self.serial,
+        )
         await self.async_set_unique_id(f"{DOMAIN}_{self.product_type}_{self.serial}")
         self._abort_if_unique_id_configured(updates={CONF_IP_ADDRESS: self.ip_address})
         return await self.async_step_discovery_confirm()
@@ -251,9 +300,10 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
         """Pair legacy entries or replace revoked tokens, preserving entity IDs."""
         entry = self._get_reauth_entry()
         self.ip_address = entry_data[CONF_IP_ADDRESS]
-        self.product_type, self.serial = pinned_identity(
-            entry_data.get(CONF_PRODUCT_TYPE),
-            entry_data.get(CONF_SERIAL),
+        self.product_type, self.serial = identity_from_unique_id(entry.unique_id)
+        LOGGER.debug(
+            "HomeWizard config flow step reauth host=%s unique_id=%s",
+            self.ip_address,
             entry.unique_id,
         )
         return await self.async_step_authorize()
@@ -261,42 +311,50 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Validate the device identity before accepting a changed IP."""
+        """Validate the device serial before accepting a changed IP."""
         entry = self._get_reconfigure_entry()
         errors: dict[str, str] = {}
-        product_type, serial = pinned_identity(
-            entry.data.get(CONF_PRODUCT_TYPE),
-            entry.data.get(CONF_SERIAL),
-            entry.unique_id,
-        )
         if user_input is not None:
+            LOGGER.debug(
+                "HomeWizard config flow step reconfigure host=%s unique_id=%s",
+                user_input[CONF_IP_ADDRESS],
+                entry.unique_id,
+            )
             try:
                 device = await async_try_connect(
                     self.hass,
                     user_input[CONF_IP_ADDRESS],
                     token=entry.data.get(CONF_TOKEN),
-                    product_type=product_type,
-                    serial=serial,
+                    step="reconfigure",
                 )
             except RecoverableError as err:
-                if (
-                    err.error_code == "invalid_auth"
-                    and entry.data.get(CONF_TOKEN)
-                    and verification_hostname(product_type, serial) is not None
-                ):
-                    # The 401 came over TLS pinned to this meter's identity, so
-                    # the address is right. Reloading starts reauthentication.
-                    return self.async_update_reload_and_abort(
-                        entry, data_updates=user_input
-                    )
+                # A rejected token does not identify the meter. The CA check
+                # only shows that some HomeWizard answered.
                 errors["base"] = err.error_code
             except Exception:  # noqa: BLE001
-                LOGGER.exception("Unexpected error while reconfiguring HomeWizard")
+                LOGGER.exception(
+                    "Unexpected error in HomeWizard pairing step reconfigure"
+                )
                 errors["base"] = "unknown"
             else:
-                await self.async_set_unique_id(
-                    f"{DOMAIN}_{device.product_type}_{device.serial}"
-                )
+                if same_meter(entry.unique_id, device.product_type, device.serial):
+                    await self.async_set_unique_id(entry.unique_id)
+                    LOGGER.debug(
+                        "HomeWizard pairing step reconfigure accepted serial %s "
+                        "for unique id %s",
+                        device.serial,
+                        entry.unique_id,
+                    )
+                else:
+                    _log_wrong_device(
+                        "reconfigure",
+                        user_input[CONF_IP_ADDRESS],
+                        entry.unique_id,
+                        device,
+                    )
+                    await self.async_set_unique_id(
+                        f"{DOMAIN}_{device.product_type}_{device.serial}"
+                    )
                 self._abort_if_unique_id_mismatch(reason="wrong_device")
                 return self.async_update_reload_and_abort(
                     entry, data_updates=user_input
@@ -315,35 +373,47 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
 
+def _entry_data(ip_address: str, token: str, device: Device) -> dict[str, Any]:
+    """Return config-entry data without changing the stored unique id."""
+    return {
+        CONF_IP_ADDRESS: ip_address,
+        CONF_TOKEN: token,
+        CONF_PRODUCT_TYPE: device.product_type,
+        CONF_SERIAL: device.serial,
+    }
+
+
 async def async_try_connect(
     hass: HomeAssistant,
     ip_address: str,
     clientsession: ClientSession | None = None,
     token: str | None = None,
     *,
-    product_type: str | None = None,
-    serial: str | None = None,
+    step: str = "connect",
 ) -> Device:
-    """Read v2 identity with the Home Assistant-managed session."""
+    """Read v2 identity with the Home Assistant-managed session.
+
+    The HomeWizard CA chain is verified. The certificate hostname is not:
+    ``python-homewizard-energy`` disables that check unless an identifier is
+    passed, and the official integration never passes one. The caller compares
+    ``device.serial`` with the expected unique id.
+    """
     await hass.async_add_executor_job(trust_development_ca)
     api = HomeWizardEnergyV2(
         ip_address,
-        identifier=verification_hostname(product_type, serial),
         token=token,
         clientsession=clientsession or async_get_clientsession(hass),
     )
     try:
         return await api.device()
     except UnauthorizedError as err:
-        raise RecoverableError("Token rejected", "invalid_auth") from err
+        raise _recover(step, err, "invalid_auth", "Token rejected") from err
     except (NotFoundError, UnsupportedError) as err:
-        raise RecoverableError("API v2 required", "unsupported_api_version") from err
+        raise _recover(step, err, "unsupported_api_version", "API v2 required") from err
     except RequestError as err:
-        raise _request_error(
-            err, pinned=verification_hostname(product_type, serial) is not None
-        ) from err
+        raise _recover(step, err, "network_error", "Cannot connect") from err
     except HomeWizardEnergyException as err:
-        raise RecoverableError("Unexpected response", "invalid_response") from err
+        raise _recover(step, err, "invalid_response", "Unexpected response") from err
     finally:
         await api.close()
 
@@ -352,31 +422,32 @@ async def async_request_token(
     hass: HomeAssistant,
     ip_address: str,
     *,
-    product_type: str | None = None,
-    serial: str | None = None,
+    step: str = "pair",
 ) -> str | None:
     """Use a distinct user name so the official integration's token stays valid."""
     await hass.async_add_executor_job(trust_development_ca)
     uuid = await instance_id.async_get(hass)
     api = HomeWizardEnergyV2(
         ip_address,
-        identifier=verification_hostname(product_type, serial),
         clientsession=async_get_clientsession(hass),
     )
     try:
         return await api.get_token(f"homewizard-instant#{uuid[:12]}")
     except DisabledError:
+        LOGGER.debug(
+            "HomeWizard pairing step %s is waiting for the button press at %s",
+            step,
+            ip_address,
+        )
         return None
     except UnauthorizedError as err:
-        raise RecoverableError("Token rejected", "invalid_auth") from err
+        raise _recover(step, err, "invalid_auth", "Token rejected") from err
     except (NotFoundError, UnsupportedError) as err:
-        raise RecoverableError("API v2 required", "unsupported_api_version") from err
+        raise _recover(step, err, "unsupported_api_version", "API v2 required") from err
     except RequestError as err:
-        raise _request_error(
-            err, pinned=verification_hostname(product_type, serial) is not None
-        ) from err
+        raise _recover(step, err, "network_error", "Cannot connect") from err
     except HomeWizardEnergyException as err:
-        raise RecoverableError("Unexpected response", "invalid_response") from err
+        raise _recover(step, err, "invalid_response", "Unexpected response") from err
     finally:
         await api.close()
 
@@ -385,15 +456,15 @@ async def async_revoke_token(
     hass: HomeAssistant,
     ip_address: str,
     token: str,
-    *,
-    product_type: str | None = None,
-    serial: str | None = None,
 ) -> None:
-    """Delete this integration's local user from the meter, best effort."""
+    """Delete this integration's local user from the meter, best effort.
+
+    The bearer token identifies the user. A different meter rejects it, so
+    revoking does not need a TLS hostname pin.
+    """
     await hass.async_add_executor_job(trust_development_ca)
     api = HomeWizardEnergyV2(
         ip_address,
-        identifier=verification_hostname(product_type, serial),
         token=token,
         clientsession=async_get_clientsession(hass),
         timeout=5,
@@ -412,13 +483,6 @@ async def async_revoke_token(
         )
     finally:
         await api.close()
-
-
-def _request_error(err: RequestError, *, pinned: bool) -> RecoverableError:
-    """Tell a different device at the address apart from an unreachable one."""
-    if pinned and isinstance(err.__cause__, ClientConnectorCertificateError):
-        return RecoverableError("Certificate identity mismatch", "wrong_device")
-    return RecoverableError("Cannot connect", "network_error")
 
 
 class RecoverableError(HomeAssistantError):

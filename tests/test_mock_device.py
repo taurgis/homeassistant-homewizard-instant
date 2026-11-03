@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import socket
 import ssl
+import subprocess
 import sys
 import threading
 from pathlib import Path
@@ -148,14 +149,33 @@ async def test_socket_waits_for_subscribe_and_auth_timeout() -> None:
             raise AssertionError("the meter pushed a topic before subscribe")
 
 
-@pytest.mark.enable_socket
-def test_device_certificate_matches_appliance_hostname(tmp_path: Path) -> None:
-    _enable_sockets()
-    if not Path("/usr/bin/openssl").exists():
-        pytest.skip("openssl is required to mint the lab certificate")
-    ca_cert, ca_key = ensure_ca(tmp_path / "ca")
-    serial = "aabbccddeeff"
-    cert, key = issue_cert(ca_cert, ca_key, serial, tmp_path / "leaf")
+def _certificate_text(cert: Path) -> str:
+    """Return the subject in RFC2253 form, which does not depend on OpenSSL's default spacing.
+
+    OpenSSL 3.0 prints ``CN = name``. OpenSSL 3.2 and later print ``CN=name``.
+    ``-nameopt RFC2253`` is the same string on both.
+    """
+    completed = subprocess.run(
+        [
+            "openssl",
+            "x509",
+            "-in",
+            str(cert),
+            "-noout",
+            "-subject",
+            "-nameopt",
+            "RFC2253",
+            "-ext",
+            "subjectAltName",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout + completed.stderr
+
+
+def _handshake(cert: Path, key: Path, ca_cert: Path, server_hostname: str) -> None:
     context = ssl.create_default_context(cadata=ca_cert.read_text(encoding="utf-8"))
     context.verify_flags = ssl.VERIFY_X509_PARTIAL_CHAIN
     context.hostname_checks_common_name = True
@@ -177,11 +197,44 @@ def test_device_certificate_matches_appliance_hostname(tmp_path: Path) -> None:
 
     thread = threading.Thread(target=_serve, daemon=True)
     thread.start()
-    client = context.wrap_socket(
-        socket.create_connection(("127.0.0.1", port), timeout=5),
-        server_hostname=hostname(serial),
+    try:
+        client = context.wrap_socket(
+            socket.create_connection(("127.0.0.1", port), timeout=5),
+            server_hostname=server_hostname,
+        )
+        client.send(b"ping")
+        client.close()
+    finally:
+        thread.join(timeout=5)
+        server.close()
+
+
+@pytest.mark.enable_socket
+def test_device_certificate_matches_a_real_p1_meter(tmp_path: Path) -> None:
+    """Lab leaves match a real P1 cert: appliance CN, no subjectAltName.
+
+    A certificate whose common name is only the serial does not verify as
+    ``appliance/p1dongle/<serial>``. Hostname pinning rejects that meter.
+    """
+    _enable_sockets()
+    if not Path("/usr/bin/openssl").exists():
+        pytest.skip("openssl is required to mint the lab certificate")
+    ca_cert, ca_key = ensure_ca(tmp_path / "ca")
+    serial = "aabbccddeeff"
+    cert, key = issue_cert(ca_cert, ca_key, serial, tmp_path / "leaf")
+    text = _certificate_text(cert)
+    assert f"CN={hostname(serial)}" in text
+    assert "Subject Alternative Name" not in text
+    assert "DNS:" not in text
+    _handshake(cert, key, ca_cert, hostname(serial))
+
+    bare, bare_key = issue_cert(
+        ca_cert,
+        ca_key,
+        serial,
+        tmp_path / "bare",
+        name="bare",
+        common_name=serial,
     )
-    client.send(b"ping")
-    client.close()
-    thread.join(timeout=5)
-    server.close()
+    with pytest.raises(ssl.SSLCertVerificationError, match="Hostname mismatch"):
+        _handshake(bare, bare_key, ca_cert, hostname(serial))
