@@ -103,6 +103,6 @@ External devices (gas/water/heat meters):
 
 ## Verification after changes
 
-- After code modifications, run the relevant linting and tests configured for this repository.
-- If no automated checks are configured, note this explicitly and perform a focused manual verification (e.g., start the dev instance and confirm logs).
-- Always run tests, linting, and type checks after every modification.
+- After code modifications, run ruff check, `ruff format --check`, mypy `--strict`, and pytest. Ruff is pinned in `requirements_test.txt`. Paths are `custom_components`, `tests`, and `scripts`.
+- `scripts/check_minimum_home_assistant.py` boots the `hacs.json` Home Assistant version in Docker against the P1 emulator. Run it when the change can affect setup or entity loading and Docker is available.
+- Always run tests, linting, format check, and type checks after every modification.

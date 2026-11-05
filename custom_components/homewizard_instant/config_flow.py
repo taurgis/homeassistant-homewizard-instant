@@ -1,4 +1,4 @@
-"""Config flow for HomeWizard."""
+"""Config flow for HomeWizard Instant."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import Mapping
 from typing import Any
 
+from aiohttp import ClientSession
 from homewizard_energy import HomeWizardEnergyV1
 from homewizard_energy.const import Model
 from homewizard_energy.errors import DisabledError, RequestError
@@ -15,12 +16,13 @@ import voluptuous as vol
 from homeassistant.components import onboarding
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_IP_ADDRESS
-from homeassistant.data_entry_flow import AbortFlow
 from homeassistant.core import HomeAssistant
+from homeassistant.data_entry_flow import AbortFlow
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from aiohttp import ClientSession
 from homeassistant.helpers.selector import TextSelector
+from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
+from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
 from .const import CONF_PRODUCT_NAME, CONF_PRODUCT_TYPE, CONF_SERIAL, DOMAIN, LOGGER
 
@@ -38,9 +40,7 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
     product_type: str | None = None
     serial: str | None = None
 
-    async def async_step_user(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Handle a flow initiated by the user."""
         errors: dict[str, str] | None = None
         if user_input is not None:
@@ -79,7 +79,7 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
-    async def async_step_zeroconf(self, discovery_info: Any) -> ConfigFlowResult:
+    async def async_step_zeroconf(self, discovery_info: ZeroconfServiceInfo) -> ConfigFlowResult:
         """Handle zeroconf discovery."""
 
         if (
@@ -101,13 +101,11 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
         self.serial = discovery_info.properties[CONF_SERIAL]
 
         await self.async_set_unique_id(f"{DOMAIN}_{self.product_type}_{self.serial}")
-        self._abort_if_unique_id_configured(
-            updates={CONF_IP_ADDRESS: discovery_info.host}
-        )
+        self._abort_if_unique_id_configured(updates={CONF_IP_ADDRESS: discovery_info.host})
 
         return await self.async_step_discovery_confirm()
 
-    async def async_step_dhcp(self, discovery_info: Any) -> ConfigFlowResult:
+    async def async_step_dhcp(self, discovery_info: DhcpServiceInfo) -> ConfigFlowResult:
         """Handle dhcp discovery to update existing entries.
 
         This flow is triggered only by DHCP discovery of known devices.
@@ -125,13 +123,9 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
         if device.serial is None:
             return self.async_abort(reason="unknown_error")
 
-        await self.async_set_unique_id(
-            f"{DOMAIN}_{device.product_type}_{device.serial}"
-        )
+        await self.async_set_unique_id(f"{DOMAIN}_{device.product_type}_{device.serial}")
 
-        self._abort_if_unique_id_configured(
-            updates={CONF_IP_ADDRESS: discovery_info.ip}
-        )
+        self._abort_if_unique_id_configured(updates={CONF_IP_ADDRESS: discovery_info.ip})
 
         # This situation should never happen, as Home Assistant will only
         # send updates for existing entries. In case it does, we'll just
@@ -147,12 +141,7 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
         product_type = self.product_type
         serial = self.serial
 
-        if (
-            ip_address is None
-            or product_name is None
-            or product_type is None
-            or serial is None
-        ):
+        if ip_address is None or product_name is None or product_type is None or serial is None:
             return self.async_abort(reason="unknown_error")
 
         errors: dict[str, str] | None = None
@@ -183,9 +172,7 @@ class HomeWizardConfigFlow(ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
-    async def async_step_reauth(
-        self, entry_data: Mapping[str, Any]
-    ) -> ConfigFlowResult:
+    async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> ConfigFlowResult:
         """Handle re-auth if API was disabled."""
         self.ip_address = entry_data[CONF_IP_ADDRESS]
         return await self.async_step_reauth_enable_api()
@@ -275,9 +262,7 @@ async def async_try_connect(
         ) from ex
 
     except RequestError as ex:
-        raise RecoverableError(
-            "Device unreachable or unexpected response", "network_error"
-        ) from ex
+        raise RecoverableError("Device unreachable or unexpected response", "network_error") from ex
 
     except asyncio.CancelledError:
         raise

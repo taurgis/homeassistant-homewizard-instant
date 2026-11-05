@@ -1,4 +1,4 @@
-"""The Homewizard integration."""
+"""The HomeWizard Instant integration."""
 
 from homewizard_energy import HomeWizardEnergyV1
 
@@ -12,7 +12,7 @@ from .coordinator import HomeWizardConfigEntry, HWEnergyDeviceUpdateCoordinator
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: HomeWizardConfigEntry) -> bool:
-    """Set up Homewizard from a config entry."""
+    """Set up HomeWizard Instant from a config entry."""
 
     api = HomeWizardEnergyV1(
         entry.data[CONF_IP_ADDRESS],

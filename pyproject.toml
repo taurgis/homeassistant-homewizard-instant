@@ -1,0 +1,46 @@
+[tool.ruff]
+# Home Assistant 2026.8 requires Python 3.14.2.
+target-version = "py314"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+  "E",  # pycodestyle
+  "F",  # pyflakes
+  "W",  # pycodestyle warnings
+  "I",  # isort
+  "UP", # pyupgrade
+  "B",  # flake8-bugbear
+  "C4", # flake8-comprehensions
+  "SIM", # flake8-simplify
+  "RUF", # ruff-specific
+  # Complexity gate. Home Assistant Core uses the same mccabe limit.
+  "C90",
+  "PLR0911", # too many return statements
+  "PLR0912", # too many branches
+  "PLR0913", # too many arguments
+  "PLR0915", # too many statements
+  "ERA", # commented-out code
+]
+# Unused arguments stay off. Home Assistant fixes signatures such as
+# async_setup_entry, so unused parameters there are the contract.
+
+[tool.ruff.lint.mccabe]
+max-complexity = 25
+
+[tool.ruff.lint.pylint]
+max-args = 12
+max-branches = 25
+max-returns = 10
+max-statements = 90
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+force-sort-within-sections = true
+known-first-party = ["homeassistant"]
+known-local-folder = ["custom_components"]
+
+[tool.ruff.lint.per-file-ignores]
+# One context manager per line shows what a test replaces. Ruff's SIM117
+# rewrite collapses those stacks.
+"tests/**" = ["SIM117"]

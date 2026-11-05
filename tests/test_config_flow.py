@@ -6,15 +6,14 @@ from ipaddress import ip_address
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-import pytest
 from homewizard_energy.const import Model
+import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.const import CONF_IP_ADDRESS
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
-
-from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.homewizard_instant.config_flow import RecoverableError, async_try_connect
 from custom_components.homewizard_instant.const import (
@@ -103,9 +102,7 @@ async def test_user_flow_success(hass, mock_device_info) -> None:
         "custom_components.homewizard_instant.async_setup_entry",
         new=AsyncMock(return_value=True),
     ):
-        result = await hass.config_entries.flow.async_init(
-            DOMAIN, context={"source": "user"}
-        )
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
         assert result["type"] == FlowResultType.FORM
 
         with patch(
@@ -123,9 +120,7 @@ async def test_user_flow_success(hass, mock_device_info) -> None:
 
 async def test_user_flow_missing_serial_aborts(hass, mock_device_info) -> None:
     """Test user flow aborts when serial is missing."""
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": "user"}
-    )
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
 
     mock_device_info.serial = None
 
@@ -143,9 +138,7 @@ async def test_user_flow_missing_serial_aborts(hass, mock_device_info) -> None:
 
 async def test_user_flow_device_not_supported(hass) -> None:
     """Test user flow aborts for unsupported device."""
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": "user"}
-    )
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
 
     unsupported = SimpleNamespace(
         product_type="other",
@@ -167,9 +160,7 @@ async def test_user_flow_device_not_supported(hass) -> None:
 
 async def test_user_flow_recoverable_error(hass) -> None:
     """Test user flow handles recoverable errors."""
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": "user"}
-    )
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
 
     with patch(
         "custom_components.homewizard_instant.config_flow.async_try_connect",
@@ -192,9 +183,7 @@ async def test_user_flow_already_configured(hass, mock_device_info) -> None:
     )
     entry.add_to_hass(hass)
 
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": "user"}
-    )
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
 
     mock_device_info.serial = "SERIAL123"
     mock_device_info.product_type = Model.P1_METER
@@ -315,9 +304,7 @@ async def test_discovery_confirm_creates_entry(hass, mock_device_info) -> None:
             "custom_components.homewizard_instant.config_flow.async_try_connect",
             return_value=mock_device_info,
         ):
-            result2 = await hass.config_entries.flow.async_configure(
-                result["flow_id"], {}
-            )
+            result2 = await hass.config_entries.flow.async_configure(result["flow_id"], {})
 
     assert result2["type"] == FlowResultType.CREATE_ENTRY
 
@@ -365,9 +352,7 @@ async def test_reauth_flow_success(hass, mock_config_entry, mock_device_info) ->
         "custom_components.homewizard_instant.config_flow.async_try_connect",
         return_value=mock_device_info,
     ):
-        result2 = await hass.config_entries.flow.async_configure(
-            result["flow_id"], {}
-        )
+        result2 = await hass.config_entries.flow.async_configure(result["flow_id"], {})
 
     assert result2["type"] == FlowResultType.ABORT
     assert result2["reason"] == "reauth_enable_api_successful"
@@ -388,9 +373,7 @@ async def test_reauth_flow_error(hass, mock_config_entry) -> None:
         "custom_components.homewizard_instant.config_flow.async_try_connect",
         side_effect=RecoverableError("boom", "network_error"),
     ):
-        result2 = await hass.config_entries.flow.async_configure(
-            result["flow_id"], {}
-        )
+        result2 = await hass.config_entries.flow.async_configure(result["flow_id"], {})
 
     assert result2["type"] == FlowResultType.FORM
     assert result2["errors"] == {"base": "network_error"}
@@ -456,9 +439,7 @@ async def test_reconfigure_flow_wrong_device(hass, mock_config_entry):
     assert result2["reason"] == "wrong_device"
 
 
-async def test_reconfigure_flow_missing_serial_aborts(
-    hass, mock_config_entry
-) -> None:
+async def test_reconfigure_flow_missing_serial_aborts(hass, mock_config_entry) -> None:
     """Test reconfigure flow aborts when serial is missing."""
     mock_config_entry.add_to_hass(hass)
 
@@ -616,9 +597,7 @@ async def test_discovery_confirm_error(hass) -> None:
         "custom_components.homewizard_instant.config_flow.async_try_connect",
         side_effect=RecoverableError("boom", "network_error"),
     ):
-        result2 = await hass.config_entries.flow.async_configure(
-            result["flow_id"], {}
-        )
+        result2 = await hass.config_entries.flow.async_configure(result["flow_id"], {})
 
     assert result2["type"] == FlowResultType.FORM
     assert result2["errors"] == {"base": "network_error"}

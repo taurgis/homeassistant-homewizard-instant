@@ -17,9 +17,7 @@ async def test_entity_device_info_identifiers(hass, mock_config_entry, mock_comb
     """Test entity uses DOMAIN-prefixed identifiers."""
     mock_config_entry.add_to_hass(hass)
 
-    coordinator = HWEnergyDeviceUpdateCoordinator(
-        hass, mock_config_entry, api=AsyncMock()
-    )
+    coordinator = HWEnergyDeviceUpdateCoordinator(hass, mock_config_entry, api=AsyncMock())
     coordinator.data = mock_combined_data
 
     entity = HomeWizardEntity(coordinator)
@@ -32,9 +30,7 @@ async def test_entity_device_info_connections(hass, mock_config_entry, mock_comb
     """Test entity registers MAC connection for DHCP registered_devices matching."""
     mock_config_entry.add_to_hass(hass)
 
-    coordinator = HWEnergyDeviceUpdateCoordinator(
-        hass, mock_config_entry, api=AsyncMock()
-    )
+    coordinator = HWEnergyDeviceUpdateCoordinator(hass, mock_config_entry, api=AsyncMock())
     coordinator.data = mock_combined_data
 
     entity = HomeWizardEntity(coordinator)

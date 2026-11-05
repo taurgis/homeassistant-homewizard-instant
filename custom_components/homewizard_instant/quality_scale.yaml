@@ -50,7 +50,12 @@ rules:
   docs-supported-devices: done
   docs-supported-functions: done
   docs-troubleshooting: done
-  dynamic-devices: done
+  dynamic-devices:
+    status: todo
+    comment: >
+      External meters (gas, water, heat) are created only in async_setup_entry.
+      A meter that appears later is added on the next config entry reload, not
+      during a coordinator update.
   entity-category: done
   entity-device-class: done
   entity-disabled-by-default: done
@@ -60,12 +65,13 @@ rules:
   reconfiguration-flow: done
   repair-issues: done
   stale-devices:
-    status: exempt
-    comment: Local device integration does not manage stale device cleanup.
+    status: todo
+    comment: >
+      External meters that disappear stay in the device registry until the
+      config entry is reloaded. Runtime removal is not implemented.
 
   # Platinum
   async-dependency: done
   inject-websession: done
-  strict-typing:
-    status: exempt
-    comment: Strict typing is not enforced for this custom integration.
+  # CI runs mypy --strict on custom_components/homewizard_instant.
+  strict-typing: done
