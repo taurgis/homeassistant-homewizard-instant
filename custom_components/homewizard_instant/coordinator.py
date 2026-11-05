@@ -1,4 +1,4 @@
-"""Update coordinator for HomeWizard."""
+"""Update coordinator for HomeWizard Instant."""
 
 from __future__ import annotations
 
@@ -67,9 +67,7 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
                 # Do not reload when performing first refresh
                 if self.data is not None:
                     # Reload config entry to let init flow handle retrying and trigger reauth
-                    self.hass.config_entries.async_schedule_reload(
-                        self.config_entry.entry_id
-                    )
+                    self.hass.config_entries.async_schedule_reload(self.config_entry.entry_id)
 
             raise UpdateFailed(
                 ex, translation_domain=DOMAIN, translation_key="api_disabled"
@@ -78,5 +76,5 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[DeviceResponseEntry]
         self.api_disabled = False
         ir.async_delete_issue(self.hass, DOMAIN, "local_api_disabled")
 
-        self.data = data
+        # DataUpdateCoordinator assigns self.data from this return value.
         return data

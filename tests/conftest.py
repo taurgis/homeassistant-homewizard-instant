@@ -4,17 +4,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 from typing import Any
 
-import sys
-
-import pytest
 from homewizard_energy.const import Model
 from homewizard_energy.models import ExternalDevice
+import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.const import CONF_IP_ADDRESS
-from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 

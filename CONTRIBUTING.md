@@ -21,8 +21,9 @@ npm install
 Run these before opening a PR:
 
 ```bash
-# Linting
-python3 -m ruff check custom_components/homewizard_instant/
+# Linting and formatting (ruff is pinned in requirements_test.txt)
+python3 -m ruff check custom_components tests scripts
+python3 -m ruff format --check custom_components tests scripts
 
 # Type checking
 python3 -m mypy --strict custom_components/homewizard_instant/
@@ -30,6 +31,8 @@ python3 -m mypy --strict custom_components/homewizard_instant/
 # Tests with coverage
 pytest tests/ -q --cov=custom_components/homewizard_instant --cov-fail-under=95
 ```
+
+`scripts/check_minimum_home_assistant.py` boots the Home Assistant version from `hacs.json` in Docker against `scripts/p1_emulator.py`. That job needs Docker and is what CI runs; it is not part of the pytest suite.
 
 ## Releases
 

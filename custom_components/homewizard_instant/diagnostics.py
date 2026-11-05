@@ -1,4 +1,4 @@
-"""Diagnostics support for P1 Monitor."""
+"""Diagnostics support for HomeWizard Instant."""
 
 from __future__ import annotations
 

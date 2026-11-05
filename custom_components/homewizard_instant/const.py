@@ -1,4 +1,4 @@
-"""Constants for the Homewizard integration."""
+"""Constants for the HomeWizard Instant integration."""
 
 from __future__ import annotations
 

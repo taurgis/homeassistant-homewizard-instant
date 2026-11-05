@@ -4,16 +4,16 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, Mock, patch
 
-import pytest
 from homewizard_energy.errors import DisabledError, RequestError
+import pytest
 
 from homeassistant.helpers.issue_registry import IssueSeverity
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
+from custom_components.homewizard_instant.const import DOMAIN
 from custom_components.homewizard_instant.coordinator import (
     HWEnergyDeviceUpdateCoordinator,
 )
-from custom_components.homewizard_instant.const import DOMAIN
 
 
 async def test_coordinator_update_success(hass, mock_config_entry, mock_combined_data):
@@ -28,9 +28,8 @@ async def test_coordinator_update_success(hass, mock_config_entry, mock_combined
     with patch(
         "custom_components.homewizard_instant.coordinator.ir.async_delete_issue"
     ) as delete_issue:
-        data = await coordinator._async_update_data()
+        await coordinator.async_refresh()
 
-    assert data == mock_combined_data
     assert coordinator.data == mock_combined_data
     assert coordinator.api_disabled is False
     delete_issue.assert_called_once_with(hass, DOMAIN, "local_api_disabled")
@@ -76,6 +75,4 @@ async def test_coordinator_disabled_error_triggers_reload(
     create_issue.assert_called_once()
     assert create_issue.call_args.args[:3] == (hass, DOMAIN, "local_api_disabled")
     assert create_issue.call_args.kwargs["severity"] == IssueSeverity.ERROR
-    hass.config_entries.async_schedule_reload.assert_called_once_with(
-        mock_config_entry.entry_id
-    )
+    hass.config_entries.async_schedule_reload.assert_called_once_with(mock_config_entry.entry_id)

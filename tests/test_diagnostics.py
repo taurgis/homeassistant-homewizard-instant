@@ -6,12 +6,12 @@ from unittest.mock import AsyncMock
 
 from homeassistant.const import CONF_IP_ADDRESS
 
+from custom_components.homewizard_instant.coordinator import (
+    HWEnergyDeviceUpdateCoordinator,
+)
 from custom_components.homewizard_instant.diagnostics import (
     _serialize_data,
     async_get_config_entry_diagnostics,
-)
-from custom_components.homewizard_instant.coordinator import (
-    HWEnergyDeviceUpdateCoordinator,
 )
 
 
@@ -24,9 +24,7 @@ async def test_async_get_config_entry_diagnostics_redacts(
         mock_config_entry, options={"token": "secret", CONF_IP_ADDRESS: "5.6.7.8"}
     )
 
-    coordinator = HWEnergyDeviceUpdateCoordinator(
-        hass, mock_config_entry, api=AsyncMock()
-    )
+    coordinator = HWEnergyDeviceUpdateCoordinator(hass, mock_config_entry, api=AsyncMock())
     coordinator.data = mock_combined_data
     mock_config_entry.runtime_data = coordinator
 

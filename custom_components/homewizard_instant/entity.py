@@ -1,4 +1,4 @@
-"""Base entity for the HomeWizard integration."""
+"""Base entity for the HomeWizard Instant integration."""
 
 from __future__ import annotations
 
@@ -65,9 +65,7 @@ def ensure_meter_device_id(coordinator: HWEnergyDeviceUpdateCoordinator) -> str 
             serial_number=info["serial_number"],
         )
 
-    return dr.async_get_device_id_by_identifier(
-        hass, identifier, config_entry_id=entry_id
-    )
+    return dr.async_get_device_id_by_identifier(hass, identifier, config_entry_id=entry_id)
 
 
 class HomeWizardEntity(CoordinatorEntity[HWEnergyDeviceUpdateCoordinator]):

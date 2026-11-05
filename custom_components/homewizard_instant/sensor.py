@@ -1,21 +1,21 @@
-"""Creates HomeWizard sensor entities."""
+"""Sensor entities for HomeWizard Instant."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Final, TYPE_CHECKING, cast
+from typing import Final
 
 from homewizard_energy.models import CombinedModels, ExternalDevice
 
-from homeassistant.components import sensor as sensor_platform
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
     SensorEntityDescription,
     SensorStateClass,
 )
+from homeassistant.components.sensor.const import DEVICE_CLASS_UNITS
 from homeassistant.const import (
     PERCENTAGE,
     SIGNAL_STRENGTH_DECIBELS,
@@ -31,30 +31,14 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.typing import StateType
 from homeassistant.util.dt import utcnow
 from homeassistant.util.variance import ignore_variance
 
-if TYPE_CHECKING:
-    from homeassistant.helpers.entity_platform import (
-        AddEntitiesCallback as AddConfigEntryEntitiesCallback,
-    )
-else:
-    try:
-        from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
-    except ImportError:  # pragma: no cover - fallback for older HA versions
-        from homeassistant.helpers.entity_platform import (
-            AddEntitiesCallback as AddConfigEntryEntitiesCallback,
-        )
-
 from .const import DOMAIN
 from .coordinator import HomeWizardConfigEntry, HWEnergyDeviceUpdateCoordinator
 from .entity import HomeWizardEntity, ensure_meter_device_id
-
-SENSOR_DEVICE_CLASS_UNITS = cast(
-    "dict[SensorDeviceClass, set[str]]",
-    getattr(sensor_platform, "DEVICE_CLASS_UNITS"),
-)
 
 PARALLEL_UPDATES = 1
 
@@ -114,21 +98,15 @@ SENSORS: Final[tuple[HomeWizardSensorEntityDescription, ...]] = (
         key="wifi_ssid",
         translation_key="wifi_ssid",
         entity_category=EntityCategory.DIAGNOSTIC,
-        has_fn=(
-            lambda data: data.system is not None and data.system.wifi_ssid is not None
-        ),
-        value_fn=(
-            lambda data: data.system.wifi_ssid if data.system is not None else None
-        ),
+        has_fn=(lambda data: data.system is not None and data.system.wifi_ssid is not None),
+        value_fn=(lambda data: data.system.wifi_ssid if data.system is not None else None),
     ),
     HomeWizardSensorEntityDescription(
         key="active_tariff",
         translation_key="active_tariff",
         has_fn=lambda data: data.measurement.tariff is not None,
         value_fn=(
-            lambda data: None
-            if data.measurement.tariff is None
-            else str(data.measurement.tariff)
+            lambda data: None if data.measurement.tariff is None else str(data.measurement.tariff)
         ),
         device_class=SensorDeviceClass.ENUM,
         options=["1", "2", "3", "4"],
@@ -140,15 +118,8 @@ SENSORS: Final[tuple[HomeWizardSensorEntityDescription, ...]] = (
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
-        has_fn=(
-            lambda data: data.system is not None
-            and data.system.wifi_strength_pct is not None
-        ),
-        value_fn=(
-            lambda data: data.system.wifi_strength_pct
-            if data.system is not None
-            else None
-        ),
+        has_fn=(lambda data: data.system is not None and data.system.wifi_strength_pct is not None),
+        value_fn=(lambda data: data.system.wifi_strength_pct if data.system is not None else None),
     ),
     HomeWizardSensorEntityDescription(
         key="wifi_rssi",
@@ -157,13 +128,8 @@ SENSORS: Final[tuple[HomeWizardSensorEntityDescription, ...]] = (
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
-        has_fn=(
-            lambda data: data.system is not None
-            and data.system.wifi_rssi_db is not None
-        ),
-        value_fn=(
-            lambda data: data.system.wifi_rssi_db if data.system is not None else None
-        ),
+        has_fn=(lambda data: data.system is not None and data.system.wifi_rssi_db is not None),
+        value_fn=(lambda data: data.system.wifi_rssi_db if data.system is not None else None),
     ),
     HomeWizardSensorEntityDescription(
         key="total_power_import_kwh",
@@ -621,9 +587,7 @@ SENSORS: Final[tuple[HomeWizardSensorEntityDescription, ...]] = (
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
-        has_fn=(
-            lambda data: data.system is not None and data.system.uptime_s is not None
-        ),
+        has_fn=(lambda data: data.system is not None and data.system.uptime_s is not None),
         value_fn=(
             lambda data: (
                 uptime_to_stable_datetime(data.system.uptime_s)
@@ -692,14 +656,10 @@ async def async_setup_entry(
     measurement = entry.runtime_data.data.measurement
     if measurement.external_devices is not None:
         for unique_id, device in measurement.external_devices.items():
-            if device.type is not None and (
-                description := EXTERNAL_SENSORS.get(device.type)
-            ):
+            if device.type is not None and (description := EXTERNAL_SENSORS.get(device.type)):
                 # Add external device
                 entities.append(
-                    HomeWizardExternalSensorEntity(
-                        entry.runtime_data, description, unique_id
-                    )
+                    HomeWizardExternalSensorEntity(entry.runtime_data, description, unique_id)
                 )
 
     async_add_entities(entities)
@@ -792,10 +752,7 @@ class HomeWizardExternalSensorEntity(HomeWizardEntity, SensorEntity):
     @property
     def device_class(self) -> SensorDeviceClass | None:
         """Validate unit of measurement and set device class."""
-        if (
-            self.native_unit_of_measurement
-            not in SENSOR_DEVICE_CLASS_UNITS[self._suggested_device_class]
-        ):
+        if self.native_unit_of_measurement not in DEVICE_CLASS_UNITS[self._suggested_device_class]:
             return None
 
         return self._suggested_device_class
