@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import logging
 import ssl
+import time
 from pathlib import Path
 from typing import Any
 
@@ -36,7 +37,9 @@ class MeterServer:
 
     def build_contexts(self) -> None:
         ca_cert, ca_key = ensure_ca(self.ca_dir)
-        cert, key = issue_cert(ca_cert, ca_key, self.meter.serial, self.work_dir, name="device")
+        cert, key = issue_cert(
+            ca_cert, ca_key, self.meter.serial, self.work_dir, name="device"
+        )
         bad_ca, bad_key = ensure_ca(self.work_dir / "untrusted-ca")
         bad_cert, bad_key_path = issue_cert(
             bad_ca, bad_key, self.meter.serial, self.work_dir, name="untrusted"
@@ -115,6 +118,7 @@ class MeterServer:
         app.router.add_post("/profile", self._profile)
         app.router.add_post("/steady", self._steady)
         app.router.add_post("/overlay", self._overlay)
+        app.router.add_post("/clock", self._clock)
         app.router.add_post("/uptime", self._uptime)
         app.router.add_post("/push", self._push_now)
         return app
@@ -194,7 +198,9 @@ class MeterServer:
             return
         header = f"Bearer {token}" if isinstance(token, str) else None
         if not self.meter.authorized(header):
-            await socket.send_json({"type": "error", "data": {"message": "user:unauthorized"}})
+            await socket.send_json(
+                {"type": "error", "data": {"message": "user:unauthorized"}}
+            )
             await socket.close()
             return
         await socket.send_json({"type": "authorized"})
@@ -230,7 +236,7 @@ class MeterServer:
         if data is None:
             return
         await socket.send_json({"type": topic, "data": data})
-        self.meter.pushes += 1
+        self.meter.note_push(topic, data)
 
     async def _push_loop(
         self, socket: web.WebSocketResponse, subscribed: set[str]
@@ -246,10 +252,15 @@ class MeterServer:
             try:
                 if isinstance(fault, str):
                     await socket.send_str(fault)
-                    self.meter.pushes += 1
+                    self.meter.note_push("malformed", None)
                 elif fault is not None:
                     await socket.send_json(fault)
-                    self.meter.pushes += 1
+                    self.meter.note_push(
+                        str(fault.get("type", "fault")),
+                        fault.get("data")
+                        if isinstance(fault.get("data"), dict)
+                        else None,
+                    )
                 elif "measurement" in subscribed and not self.meter.faults.silent:
                     await self._send_topic(socket, "measurement")
             except (ConnectionResetError, RuntimeError):
@@ -272,14 +283,18 @@ class MeterServer:
         if not isinstance(name, str) or name not in FAULT_NAMES:
             return _json({"error": "unknown fault", "faults": FAULT_NAMES}, status=400)
         interval = body.get("interval")
-        self.meter.apply_fault(name, float(interval) if isinstance(interval, (int, float)) else None)
+        self.meter.apply_fault(
+            name, float(interval) if isinstance(interval, (int, float)) else None
+        )
         LOGGER.info("fault %s on %s", name, self.meter.serial)
         if name == "hang":
             self.meter.pause_reads()
         if name == "drop":
             await self._close_sockets()
         if name in {"restart", "tls_change"}:
-            self._ssl = self._untrusted if self.meter.faults.tls_untrusted else self._trusted
+            self._ssl = (
+                self._untrusted if self.meter.faults.tls_untrusted else self._trusted
+            )
             await self.restart_https()
         if name in {"revoke_token", "refuse_auth"}:
             await self._reject_sockets()
@@ -312,12 +327,26 @@ class MeterServer:
         self.meter.steady = bool(body.get("enabled", True))
         return _json({"steady": self.meter.steady})
 
+    async def _clock(self, request: web.Request) -> web.Response:
+        """Freeze or release the smart-meter timestamp on later measurements."""
+        body = await _body(request)
+        if body.get("frozen"):
+            stamp = body.get("timestamp")
+            if not isinstance(stamp, str) or not stamp:
+                stamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime())
+            self.meter.frozen_timestamp = stamp
+        else:
+            self.meter.frozen_timestamp = None
+        return _json({"frozen_timestamp": self.meter.frozen_timestamp})
+
     async def _overlay(self, request: web.Request) -> web.Response:
         body = await _body(request)
         if body.get("reset"):
             self.meter.overlay.clear()
         else:
-            self.meter.overlay.update({key: value for key, value in body.items() if key != "reset"})
+            self.meter.overlay.update(
+                {key: value for key, value in body.items() if key != "reset"}
+            )
         await self._broadcast("measurement")
         return _json({"overlay": self.meter.overlay})
 

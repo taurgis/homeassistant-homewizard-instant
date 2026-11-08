@@ -302,12 +302,15 @@ async def test_unchanged_push_is_skipped(hass, mock_config_entry, mock_combined_
     coordinator.async_add_listener(listener)
     coordinator._async_publish(replace(mock_combined_data))
     listener.assert_not_called()
+    coordinator.api.reported_generation = 1
+    coordinator._async_publish(replace(mock_combined_data))
+    listener.assert_called_once()
     changed = replace(
         mock_combined_data,
         measurement=replace(mock_combined_data.measurement, power_w=999),
     )
     coordinator._async_publish(changed)
-    listener.assert_called_once()
+    assert listener.call_count == 2
 
 
 async def test_firmware_update_reaches_device_registry(

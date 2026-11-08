@@ -298,6 +298,27 @@ async def test_replayed_measurement_is_not_fresh(monkeypatch):
     ]
     await api.receive()
     assert api.last_measurement == 20.0
+    assert api.reported_generation == 1
+    await api.close()
+
+
+async def test_repeated_live_measurement_is_fresh(monkeypatch):
+    """The same telegram on an open socket is a new report, not a replay."""
+    import custom_components.homewizard_instant.websocket as module
+
+    from types import SimpleNamespace
+
+    clock = iter([0.0, 10.0, 30.0])
+    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: next(clock)))
+    measurement = {"power_w": 1, "timestamp": "2026-01-01T00:00:00"}
+    api, _, socket = client(initial()[:-1] + [frame("measurement", measurement)])
+    await api.connect()
+    assert api.last_measurement == 10.0
+    assert api.reported_generation == 0
+    socket.receive.side_effect = [frame("measurement", measurement)]
+    await api.receive()
+    assert api.last_measurement == 30.0
+    assert api.reported_generation == 1
     await api.close()
 
 

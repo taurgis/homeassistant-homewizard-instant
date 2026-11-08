@@ -287,6 +287,9 @@ class HomeWizardWebSocket:
         self._invalid = 0
         self._last_warning: dict[str, float] = {}
         self.last_measurement = time.monotonic()
+        # Counts measurement frames on an open stream. The subscribe replay
+        # during connect() does not increment it.
+        self.reported_generation = 0
 
     async def connect(self) -> CombinedModels:
         """Authenticate and wait for every initial snapshot before becoming available."""
@@ -418,8 +421,17 @@ class HomeWizardWebSocket:
                 self._topics[topic] = device
             elif topic == "measurement":
                 measurement = _parse(Measurement, data, problems)
-                if measurement.timestamp is None or measurement != self._measurement:
+                # A repeated telegram on the live socket is still a new report.
+                # The copy replayed while connecting is not: _ready is false
+                # until every initial snapshot has been accepted, and an equal
+                # replay must not make a silent meter look fresh.
+                changed = (
+                    measurement.timestamp is None or measurement != self._measurement
+                )
+                if changed or self._ready:
                     self.last_measurement = time.monotonic()
+                if self._ready:
+                    self.reported_generation += 1
                 self._topics[topic] = self._measurement = measurement
             else:
                 self._topics[topic] = _parse(System, data, problems)
