@@ -1,0 +1,35 @@
+# OmniBattery closed loop: Home Assistant reads the 1-phase P1 meter through
+# homewizard_instant, OmniBattery drives a Venus E 3.0 Modbus model, and the
+# model writes the resulting grid power back to that meter.
+#
+#   export OMNIBATTERY_REPO=/path/to/Omnibattery
+#   docker compose -f docker-compose.yml -f docker-compose.omnibattery.yml up -d
+#
+# venus-e3 is a Python model of the Modbus surface of Control firmware 151
+# (tools/lab/venus_e3_modbus.py). It is not the firmware; add
+# docker-compose.firmware151.yml to run the real 151 image instead.
+
+services:
+  homeassistant:
+    volumes:
+      - ${OMNIBATTERY_REPO:?set OMNIBATTERY_REPO}/custom_components/omnibattery:/config/custom_components/omnibattery:ro
+
+  venus-e3:
+    image: python:3.13-slim
+    init: true
+    networks:
+      lab:
+        ipv4_address: 172.30.28.21
+    ports:
+      - "127.0.0.1:8090:8090"
+    volumes:
+      - ../tools/lab/venus_e3_modbus.py:/opt/venus_e3_modbus.py:ro
+    environment:
+      HOUSE_LOAD_W: "450"
+      P1_CONTROL_URL: http://172.30.28.11:8080
+      MODBUS_PORT: "502"
+      HTTP_PORT: "8090"
+      # Seconds the model waits before answering each Modbus request.
+      MODBUS_LATENCY_S: ${MODBUS_LATENCY_S:-0}
+    command: ["python", "/opt/venus_e3_modbus.py"]
+    restart: unless-stopped

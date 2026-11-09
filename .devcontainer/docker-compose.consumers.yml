@@ -9,13 +9,12 @@
 #
 #   docker build -f tools/firmware_emulator/Dockerfile -t marstek-fw-emulator:local .
 #
-# synthetic-venus is a Python Modbus stand-in. It is not that firmware.
+# The OmniBattery loop with the Python Modbus model is docker-compose.omnibattery.yml.
 
 services:
   homeassistant:
     volumes:
       - ${MARSTEK_REPO:?set MARSTEK_REPO}/custom_components/marstek:/config/custom_components/marstek:ro
-      - ${OMNIBATTERY_REPO:?set OMNIBATTERY_REPO}/custom_components/omnibattery:/config/custom_components/omnibattery:ro
 
   venus-e3-151:
     image: ${MARSTEK_FW_IMAGE:-marstek-fw-emulator:local}
@@ -47,19 +46,6 @@ services:
     volumes:
       - ${MARSTEK_REPO}/tools/firmware_emulator/astrameter/config.ini:/app/config.ini:ro
     restart: on-failure
-
-  synthetic-venus:
-    image: python:3.13-slim
-    networks:
-      lab:
-        ipv4_address: 172.30.28.21
-    volumes:
-      - ../tools/lab/synthetic_venus_modbus.py:/opt/synthetic_venus_modbus.py:ro
-    environment:
-      HOUSE_LOAD_W: "600"
-      P1_CONTROL_URL: http://172.30.28.11:8080
-      MODBUS_PORT: "502"
-    command: ["python", "/opt/synthetic_venus_modbus.py"]
 
 volumes:
   venus_e3_151:

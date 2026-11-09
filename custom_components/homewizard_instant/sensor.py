@@ -38,7 +38,7 @@ from homewizard_energy.models import CombinedModels, ExternalDevice, System
 
 from .const import DOMAIN
 from .coordinator import HomeWizardConfigEntry, HWEnergyDeviceUpdateCoordinator
-from .entity import HomeWizardEntity, p1_device_info
+from .entity import HomeWizardEntity, Topic, p1_device_info
 
 SENSOR_DEVICE_CLASS_UNITS = cast(
     "dict[SensorDeviceClass, set[str]]",
@@ -55,6 +55,9 @@ class HomeWizardSensorEntityDescription(SensorEntityDescription):
     enabled_fn: Callable[[CombinedModels], bool] = lambda x: True
     has_fn: Callable[[CombinedModels], bool]
     value_fn: Callable[[CombinedModels], StateType | datetime]
+    # The topic value_fn reads. The entity reports only when that topic brings
+    # a new frame, so a system reply does not refresh a power reading.
+    topic: Topic = "measurement"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -104,6 +107,7 @@ SENSORS: Final[tuple[HomeWizardSensorEntityDescription, ...]] = (
     HomeWizardSensorEntityDescription(
         key="wifi_ssid",
         translation_key="wifi_ssid",
+        topic="system",
         entity_category=EntityCategory.DIAGNOSTIC,
         has_fn=(
             lambda data: data.system is not None and data.system.wifi_ssid is not None
@@ -129,6 +133,7 @@ SENSORS: Final[tuple[HomeWizardSensorEntityDescription, ...]] = (
     HomeWizardSensorEntityDescription(
         key="wifi_strength",
         translation_key="wifi_strength",
+        topic="system",
         native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -147,6 +152,7 @@ SENSORS: Final[tuple[HomeWizardSensorEntityDescription, ...]] = (
     HomeWizardSensorEntityDescription(
         key="wifi_rssi",
         translation_key="wifi_rssi",
+        topic="system",
         native_unit_of_measurement=SIGNAL_STRENGTH_DECIBELS,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -613,6 +619,7 @@ SENSORS: Final[tuple[HomeWizardSensorEntityDescription, ...]] = (
     HomeWizardSensorEntityDescription(
         key="uptime",
         translation_key="uptime",
+        topic="system",
         device_class=SensorDeviceClass.UPTIME,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
@@ -739,6 +746,7 @@ class HomeWizardSensorEntity(HomeWizardEntity, SensorEntity):
         """Initialize Sensor Domain."""
         super().__init__(coordinator)
         self.entity_description = description
+        self._topic = description.topic
         self._uptime_system: System | None = None
         self._uptime_value: StateType | datetime | None = None
         if description.key == "uptime":

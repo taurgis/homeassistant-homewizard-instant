@@ -16,6 +16,7 @@ from custom_components.homewizard_instant.sensor import (
     async_setup_entry,
 )
 from custom_components.homewizard_instant.sensor import (
+    EXTERNAL_SENSORS,
     SENSORS,
     to_percentage,
     uptime_to_datetime,
@@ -388,3 +389,57 @@ async def test_uptime_refreshes_on_coordinator_update(
         sensor._handle_coordinator_update()
     write.assert_called_once()
     assert sensor.native_value > initial
+
+
+async def test_reports_follow_their_own_topic(
+    hass, mock_config_entry, mock_combined_data
+):
+    """A system reply must not refresh a power reading, and vice versa."""
+    from dataclasses import replace
+    from unittest.mock import Mock
+
+    mock_config_entry.add_to_hass(hass)
+    coordinator = HWEnergyDeviceUpdateCoordinator(
+        hass, mock_config_entry, api=AsyncMock()
+    )
+    coordinator.data = mock_combined_data
+    power = HomeWizardSensorEntity(
+        coordinator, next(d for d in SENSORS if d.key == "active_power_w")
+    )
+    wifi = HomeWizardSensorEntity(
+        coordinator, next(d for d in SENSORS if d.key == "wifi_ssid")
+    )
+    gas = HomeWizardExternalSensorEntity(
+        coordinator,
+        EXTERNAL_SENSORS[
+            mock_combined_data.measurement.external_devices["gas123"].type
+        ],
+        "gas123",
+        None,
+    )
+    entities = (power, wifi, gas)
+    for entity in entities:
+        entity.async_write_ha_state = Mock()
+
+    def update() -> list[int]:
+        for entity in entities:
+            entity._handle_coordinator_update()
+        return [entity.async_write_ha_state.call_count for entity in entities]
+
+    assert update() == [1, 1, 1]
+    # Same snapshot republished: nothing new to report.
+    assert update() == [1, 1, 1]
+    # The minute system reply reuses the measurement object.
+    coordinator.data = replace(
+        coordinator.data, system=replace(coordinator.data.system)
+    )
+    assert update() == [1, 2, 1]
+    # A repeated telegram is a new frame object with equal values.
+    coordinator.data = replace(
+        coordinator.data, measurement=replace(coordinator.data.measurement)
+    )
+    assert update() == [2, 2, 2]
+    # Availability changes are always written.
+    coordinator.last_update_success = False
+    assert update() == [3, 3, 3]
+    assert update() == [3, 3, 3]

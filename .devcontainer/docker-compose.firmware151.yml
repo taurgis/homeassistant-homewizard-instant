@@ -1,0 +1,95 @@
+# Venus E 3.0 Control firmware 151 as the battery behind the P1 meter.
+#
+# Battery and meter only (add OmniBattery yourself, or stack the next example):
+#
+#   docker compose -f docker-compose.yml -f docker-compose.firmware151.yml up -d
+#
+# With OmniBattery mounted into Home Assistant:
+#
+#   export OMNIBATTERY_REPO=/path/to/Omnibattery
+#   docker compose -f docker-compose.yml -f docker-compose.omnibattery.yml \
+#       -f docker-compose.firmware151.yml up -d
+#
+# marstek-fw runs the vendor image VNSEE3-0_ems_app_0151 in the Renode emulator
+# of taurgis/has-marstek-local-api. Docker builds it from a pinned commit of
+# that repository, so no second clone is needed; set MARSTEK_FW_CONTEXT to a
+# local clone (or another git ref) to build from there instead. Behind a
+# TLS-intercepting proxy, set MARSTEK_BUILD_CA to its CA bundle file. The pinned
+# commit carries the emulator's CH395 TCP bridge, so the firmware serves Modbus
+# TCP itself on 172.30.28.22:502. Its Wi-Fi side (Local API, UDP 30000) sits on
+# a network of its own, since each side needs its own address. The first start
+# writes a fresh EEPROM and reboots once (about a minute).
+#
+# venus-e3 serves no Modbus here: it reads the inverter output from the
+# emulator's grid meter (house load 0) and writes house load minus that output
+# to the 1-phase P1 meter. GET http://127.0.0.1:8090/state shows the plant and
+# POST /load {"watts": 900} changes the house. Point OmniBattery at
+# 172.30.28.22 (tools/dev/omnibattery_pd.py --battery-host 172.30.28.22).
+
+services:
+  marstek-fw:
+    build:
+      context: ${MARSTEK_FW_CONTEXT:-https://github.com/taurgis/has-marstek-local-api.git#bf83f201f8d0a244fdd64af1a324077906d04454}
+      dockerfile: tools/firmware_emulator/Dockerfile
+      secrets:
+        - build_ca
+    image: marstek-fw-emulator:local
+    init: true
+    stop_grace_period: 20s
+    networks:
+      marstek_wifi:
+        ipv4_address: 172.30.29.20
+      lab:
+        ipv4_address: 172.30.28.22
+    volumes:
+      - marstek_fw_state:/state
+    command:
+      - --firmware
+      - VNSE3-0:151
+      - --gateway
+      - 172.30.29.1
+      - --ethernet
+      - --eth-ip
+      - 172.30.28.22
+      - --eth-gateway
+      - 172.30.28.1
+      - --house-load
+      - 0,0,0
+      - --soc
+      - "60"
+      - --meter-bind
+      - 0.0.0.0
+      - --meter-port
+      - "8099"
+    restart: unless-stopped
+
+  venus-e3:
+    image: python:3.13-slim
+    init: true
+    networks:
+      lab:
+        ipv4_address: 172.30.28.21
+    ports:
+      - "127.0.0.1:8090:8090"
+    volumes:
+      - ../tools/lab/venus_e3_modbus.py:/opt/venus_e3_modbus.py:ro
+    environment:
+      HOUSE_LOAD_W: "450"
+      P1_CONTROL_URL: http://172.30.28.11:8080
+      HTTP_PORT: "8090"
+      INVERTER_URL: http://172.30.28.22:8099
+    command: ["python", "/opt/venus_e3_modbus.py"]
+    restart: unless-stopped
+
+networks:
+  marstek_wifi:
+    ipam:
+      config:
+        - subnet: 172.30.29.0/24
+
+volumes:
+  marstek_fw_state:
+
+secrets:
+  build_ca:
+    file: ${MARSTEK_BUILD_CA:-/dev/null}

@@ -303,8 +303,11 @@ async def test_unchanged_push_is_skipped(hass, mock_config_entry, mock_combined_
     coordinator._async_publish(replace(mock_combined_data))
     listener.assert_not_called()
     coordinator.api.reported_generation = 1
-    coordinator._async_publish(replace(mock_combined_data))
+    repeated = replace(mock_combined_data)
+    coordinator._async_publish(repeated)
     listener.assert_called_once()
+    # Entities key their report on the frame object, so it must be handed on.
+    assert coordinator.data is repeated
     changed = replace(
         mock_combined_data,
         measurement=replace(mock_combined_data.measurement, power_w=999),
