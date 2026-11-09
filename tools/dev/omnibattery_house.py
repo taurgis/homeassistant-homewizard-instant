@@ -34,8 +34,8 @@ YOURS = {
     N + "controller_max_power_change": 800,
     N + "controller_deadband": 40,
     N + "controller_direction_hysteresis": 60,
-    N + "min_charge_power": 150,
-    N + "min_discharge_power": 100,
+    N + "min_charge_power": 90,
+    N + "min_discharge_power": 80,
     N + "relay_cooldown": 10,
     N + "target_grid_power": 0,
     N + "min_cycle_interval": 1.0,
@@ -56,6 +56,11 @@ CONFIGS = {
     "min50": {N + "min_charge_power": 50, N + "min_discharge_power": 50},
     "target-30": {N + "target_grid_power": -30},
     "cool5": {N + "relay_cooldown": 5},
+    "kp0.5": {N + "controller_kp": 0.5},
+    "kp0.7": {N + "controller_kp": 0.7},
+    "int0.5": {N + "min_cycle_interval": 0.5},
+    "kp0.5_int0.5": {N + "controller_kp": 0.5, N + "min_cycle_interval": 0.5},
+    "kp0.7_int0.5": {N + "controller_kp": 0.7, N + "min_cycle_interval": 0.5},
 }
 DIS, CHG = 800, 2500
 
