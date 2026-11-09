@@ -25,7 +25,7 @@ from homewizard_energy.v2.cacert import CACERT
 from mashumaro.exceptions import InvalidFieldValue, MissingField
 from yarl import URL
 
-from .const import LOGGER
+from .const import LOGGER, SYSTEM_REFRESH_INTERVAL
 
 _APPLIED_DEV_CA: str | None = None
 _TOPICS = ("device", "measurement", "system")
@@ -109,6 +109,17 @@ _TOPIC_RANGES = {
 }
 _WARNING_INTERVAL = 60.0
 _INVALID_LIMIT = 30
+# aiohttp pings only after this many seconds without a received frame and gives
+# up when the pong is half that late. A half-open link (meter rebooted, Wi-Fi
+# gone) is then closed within about 22 s instead of 45 s, well inside the 60 s
+# a grid controller still trusts a reading. A DSMR 5 meter sends every second,
+# so pings go out only when frames stop; 15 s also stays clear of the 10 s
+# cadence of older meters.
+_HEARTBEAT = 15.0
+# A meter that still answers pings but sends nothing, not even the system reply
+# requested every SYSTEM_REFRESH_INTERVAL, is wedged. A silent P1 port alone
+# never reaches this: the system reply keeps arriving.
+_IDLE_TIMEOUT = SYSTEM_REFRESH_INTERVAL.total_seconds() + 30
 
 
 def _certificate_bundle(text: str) -> str | None:
@@ -301,7 +312,7 @@ class HomeWizardWebSocket:
                 self._socket = await self._session.ws_connect(
                     self._url,
                     ssl=self._context,
-                    heartbeat=30,
+                    heartbeat=_HEARTBEAT,
                     headers={"X-Api-Version": "2"},
                 )
                 message = await self._next_message()
@@ -359,7 +370,14 @@ class HomeWizardWebSocket:
 
     async def _receive(self) -> dict[str, Any] | None:
         assert self._socket is not None
-        message = await self._socket.receive()
+        try:
+            message = await self._socket.receive(
+                timeout=_IDLE_TIMEOUT if self._ready else None
+            )
+        except TimeoutError as err:
+            raise RequestError(
+                f"No HomeWizard WebSocket frame for {_IDLE_TIMEOUT:.0f} s"
+            ) from err
         if message.type != WSMsgType.TEXT:
             raise RequestError("WebSocket disconnected")
         try:

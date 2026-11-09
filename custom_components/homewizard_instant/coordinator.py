@@ -181,6 +181,8 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[CombinedModels]):
                 return
             self._seen_generation = generation
             LOGGER.debug("HomeWizard measurement confirmed with unchanged values")
+            # Equal values, new frame object: entities key their report on it.
+            self.data = data
             self.async_update_listeners()
             return
         self._seen_generation = generation

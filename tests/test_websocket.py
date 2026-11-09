@@ -451,3 +451,31 @@ async def test_request_reads_a_topic_once_connected():
     socket.send_json.reset_mock()
     await api.request("system")
     socket.send_json.assert_not_called()
+
+
+async def test_dead_link_is_detected_quickly():
+    """Pings start after 15 s without frames; the stream read has an idle cap."""
+    import custom_components.homewizard_instant.websocket as module
+
+    api, session, socket = client(initial())
+    await api.connect()
+    assert session.ws_connect.call_args.kwargs["heartbeat"] == 15
+    # The handshake has its own 30 s budget; only the live stream gets the cap.
+    assert all(
+        call.kwargs.get("timeout") is None for call in socket.receive.call_args_list
+    )
+    socket.receive.side_effect = [frame("measurement", {"power_w": 2})]
+    await api.receive()
+    assert socket.receive.call_args.kwargs["timeout"] == module._IDLE_TIMEOUT
+    # Longer than one system refresh: a silent P1 port still gets that reply.
+    assert module._IDLE_TIMEOUT > module.SYSTEM_REFRESH_INTERVAL.total_seconds()
+    await api.close()
+
+
+async def test_wedged_socket_raises_a_connection_error():
+    api, _, socket = client(initial())
+    await api.connect()
+    socket.receive.side_effect = TimeoutError
+    with pytest.raises(RequestError, match="No HomeWizard WebSocket frame for 90 s"):
+        await api.receive()
+    await api.close()
