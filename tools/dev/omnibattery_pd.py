@@ -43,6 +43,9 @@ QUALITY = "sensor.omnibattery_pd_control_quality"
 USER = {"name": "Dev", "username": "dev", "password": "devpass1", "language": "en"}
 
 OMNIBATTERY_STEPS: dict[str, dict[str, Any]] = {
+    # Offered after an earlier entry was removed; start clean so --battery-host
+    # applies.
+    "restore_backup": {"restore": False},
     "user": {
         "consumption_sensor": POWER,
         "meter_inverted": False,

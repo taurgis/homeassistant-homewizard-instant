@@ -115,6 +115,15 @@ The first start writes a fresh EEPROM and reboots once (about a minute). Measure
 
 `docker-compose.consumers.yml` also has `venus-e3-151` at `172.30.28.20` for the Marstek local-API integration; that one has no Ethernet and no Modbus.
 
+Results of `omnibattery_pd.py --minutes 5 --step-seconds 90` with OmniBattery 1.5.0 (commit 39b052b):
+
+| Battery | Steady 450 W | Load steps | Grid sensor | Meter drop |
+|---|---|---|---|---|
+| Python model | `stable` (battery 430 W, grid about 17 W) | `sluggish`; each step settled to under 50 W of grid in 15-20 s | 1.000 s, stdev 0.8-1.5 ms | back in 1.0 s |
+| Firmware 151 | `battery_limited` (37005 reads SoC 0, no discharge) | charging works: -600 W export settled at 620 W charge | 1.000 s, stdev 0.7-1.7 ms | back in 1.0 s |
+
+The `sluggish` verdicts after the steps come from how OmniBattery scores. While the grid error is inside its deadband (40 W), the control cycle returns before it updates the quality metric. The RMS therefore only samples step transients, and it freezes at that value once the loop settles. `metric_age_s` on the sensor shows this, and the verdict falls back to `collecting_data` after 300 s. Hold a phase for more than five minutes to see the settled verdict.
+
 `omnibattery_pd.py` (needs `aiohttp`) onboards a fresh Home Assistant as `dev` / `devpass1`, pairs the 1-phase meter, adds OmniBattery with the battery at `--battery-host`, and then holds a steady 450 W house, steps the load (700 W, 250 W, -600 W export so the battery charges, back to 450 W), and drops the meter connection once. It writes every `sensor.omnibattery_pd_control_quality` verdict and the report cadence of `sensor.p1_meter_power` per phase.
 
 Two things to know when measuring freshness yourself. Home Assistant does not deliver `state_reported` through `subscribe_events`, and `/api/states` serves a cached `last_reported` after a report that did not change the state. Read `{{ states.sensor.p1_meter_power.last_reported }}` through `/api/template` instead; that is the attribute OmniBattery reads.
