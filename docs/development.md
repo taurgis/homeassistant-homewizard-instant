@@ -133,6 +133,24 @@ Results of `omnibattery_pd.py --minutes 5 --step-seconds 90` with OmniBattery 1.
 
 The `sluggish` verdicts after the steps come from how OmniBattery scores. While the grid error is inside its deadband (40 W), the control cycle returns before it updates the quality metric. The RMS therefore only samples step transients, and it freezes at that value once the loop settles. `metric_age_s` on the sensor shows this, and the verdict falls back to `collecting_data` after 300 s. Hold a phase for more than five minutes to see the settled verdict.
 
+**Tuning against a 1 s HomeWizard meter.** `tools/dev/omnibattery_house.py` replays one 12-minute house slice against several OmniBattery configs on the Python model. The slice has east/west 6 kWp solar with cloud edges, a kettle, a washer, an oven and a fridge. Each config is scored on the grid energy a perfect controller within the battery limits would have avoided. The baseline is deadband 40 W, min charge 150 W, min discharge 100 W, relay cooldown 10 s, target 0 W, and the `balanced` profile:
+
+| Config | Avoidable import + export (Wh) | Cost (EUR cent) |
+|---|---|---|
+| baseline, three runs | 27.0 / 28.6 / 26.0 | 0.77 / 0.81 / 0.74 |
+| min charge and discharge 50 W | 25.8 | 0.73 |
+| relay cooldown 5 s | 27.3 | 0.77 |
+| Kd 0 / Kd 0.1 | 27.0 / 28.7 | 0.76 / 0.82 |
+| deadband 25 W | 30.5 | 0.87 |
+| target grid power -30 W | 30.9 | 0.88 |
+
+Run-to-run spread is about 0.07 cent, so only the worse configs stand out: a narrower deadband and a negative target both cost more. Separate load-step tests showed:
+
+- PD min cycle interval 0.8 s matches 1.0 s, and 0 s doubles both the error and the Modbus writes.
+- The `aggressive` and `very_aggressive` profiles did not settle steps faster.
+
+Every config loses about what a perfect controller would lose with a 4 s response delay. HomeWizard contributes about 1 ms of that. The meter's 1 s telegrams and the battery's dead time and ramp account for roughly 2 s. The rest is OmniBattery's loop: incremental PD steps, a fixed 2 s grid filter, and a derivative dip. After a step, the next telegram already shows the battery responding, and the D term cuts the command back before it climbs again.
+
 `omnibattery_pd.py` (needs `aiohttp`) onboards a fresh Home Assistant as `dev` / `devpass1`, pairs the 1-phase meter, adds OmniBattery with the battery at `--battery-host`, and then holds a steady 450 W house, steps the load (700 W, 250 W, -600 W export so the battery charges, back to 450 W), and drops the meter connection once. It writes every `sensor.omnibattery_pd_control_quality` verdict and the report cadence of `sensor.p1_meter_power` per phase.
 
 Two things to know when measuring freshness yourself. Home Assistant does not deliver `state_reported` through `subscribe_events`, and `/api/states` serves a cached `last_reported` after a report that did not change the state. Read `{{ states.sensor.p1_meter_power.last_reported }}` through `/api/template` instead; that is the attribute OmniBattery reads.
