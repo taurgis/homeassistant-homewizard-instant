@@ -149,7 +149,26 @@ Run-to-run spread is about 0.07 cent, so only the worse configs stand out: a nar
 - PD min cycle interval 0.8 s matches 1.0 s, and 0 s doubles both the error and the Modbus writes.
 - The `aggressive` and `very_aggressive` profiles did not settle steps faster.
 
-Every config loses about what a perfect controller would lose with a 4 s response delay. HomeWizard contributes about 1 ms of that. The meter's 1 s telegrams and the battery's dead time and ramp account for roughly 2 s. The rest is OmniBattery's loop: incremental PD steps, a fixed 2 s grid filter, and a derivative dip. After a step, the next telegram already shows the battery responding, and the D term cuts the command back before it climbs again.
+Every config loses about what a perfect controller would lose with a 4 s response delay. HomeWizard contributes about 1 ms of that. The meter's 1 s telegrams and the battery's dead time and ramp account for roughly 2 s. The rest is OmniBattery's loop: incremental PD steps, a fixed 2 s grid filter, and a dip after each rise. After a step, the next telegram already shows the battery responding while the polled battery output does not yet, and the discharge ceiling cuts the command back before it climbs again (see below).
+
+**Settings for a stock OmniBattery.** A second round used the minimum charge and discharge power of a real setup (90 W / 80 W). The lab model answers Modbus about as fast as a real Venus E 3.0 on firmware 151: OmniBattery's diagnostics show a 1.36 s poll here and 1.44 s on the real unit, mostly OmniBattery's own 150 ms wait after each v3 request.
+
+| Config | Cost (EUR cent) per run | Modbus writes |
+|---|---|---|
+| baseline (Kp 0.35, interval 1.0 s) | 0.73 / 0.82 | 354 / 378 |
+| Kp 0.5 | 0.84 | 273 |
+| Kp 0.7 | 0.71 | 279 |
+| interval 0.5 s | 0.74 | 402 |
+| Kp 0.5, interval 0.5 s | 0.77 | 345 |
+| **Kp 0.7, interval 0.5 s** | **0.64 / 0.76 / 0.65** | 405 / 237 / 261 |
+
+Kp 0.7 with a 0.5 s interval averages 0.68 cent against 0.78 for the baseline over all five baseline runs.
+
+`tools/dev/omnibattery_latency.py` times each link of a 400 W load step. With the baseline, the change reaches `sensor.p1_meter_power` in about 0.1 s. On a rise, the first set-point write then comes 0.1-1.2 s later, and the battery covers 90 % of the step after about 12 s. A drop is covered in about 1.2 s because OmniBattery caps discharge at the uncovered house load right away. Kp 0.7 brings rises to about 7 s. Kp 1.0 reaches 90 % in about 2.4 s but takes 16-22 s to settle. Three behaviours of OmniBattery 1.5.0 set these times:
+
+- The incremental P term is normalised to a 2 s nominal cycle, so Kp is per 2 s whatever the meter cadence.
+- The load-step feedforward only fires for jumps above max(5 x deadband, 400 W) and waits for a second sample to confirm.
+- The discharge ceiling adds the battery's polled `ac_power` to the grid reading. The meter reports every second but a Marstek poll takes about 1.4 s and runs every 3-4 s, so during a ramp it caps discharge at a figure that is too low and the ramp dips before it climbs again.
 
 `omnibattery_pd.py` (needs `aiohttp`) onboards a fresh Home Assistant as `dev` / `devpass1`, pairs the 1-phase meter, adds OmniBattery with the battery at `--battery-host`, and then holds a steady 450 W house, steps the load (700 W, 250 W, -600 W export so the battery charges, back to 450 W), and drops the meter connection once. It writes every `sensor.omnibattery_pd_control_quality` verdict and the report cadence of `sensor.p1_meter_power` per phase.
 
