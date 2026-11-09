@@ -29,12 +29,14 @@ The emulated 151 image answers 0 for both while 32104 and the Local API report
 the real SoC. The model fills them, so OmniBattery runs against it.
 
 The plant: the inverter follows the set-point after ``DEAD_TIME_S`` and ramps
-at ``RAMP_W_PER_S``.
+at ``RAMP_W_PER_S``. ``MODBUS_LATENCY_S`` delays every Modbus reply, to copy a
+battery that is slow to answer.
 
 Control on ``HTTP_PORT`` (plain HTTP, no auth, lab only):
 
 * ``GET /state`` - plant and register summary
 * ``POST /load`` ``{"watts": 900}`` - set the house load
+* ``GET /trace`` - timestamped load changes and set-point writes
 """
 
 from __future__ import annotations
@@ -58,6 +60,9 @@ PORT = int(os.environ.get("MODBUS_PORT", "502"))
 HTTP_PORT = int(os.environ.get("HTTP_PORT", "8090"))
 INVERTER_URL = os.environ.get("INVERTER_URL", "")
 DEAD_TIME_S = float(os.environ.get("DEAD_TIME_S", "0.6"))
+# Time the battery takes to answer one Modbus request. The model answers at once
+# by default; the emulated 151 image took about 0.3 s per request.
+MODBUS_LATENCY_S = float(os.environ.get("MODBUS_LATENCY_S", "0"))
 RAMP_W_PER_S = float(os.environ.get("RAMP_W_PER_S", "1000"))
 TICK_S = 0.1
 SOC_START = float(os.environ.get("SOC", "62"))
@@ -126,6 +131,9 @@ class Venus:
         self.clients = 0
         self._noise = 0.0
         self._noise_at = 0.0
+        # (monotonic time, event, value) for load changes and set-point writes,
+        # read by tools/dev/omnibattery_latency.py through GET /trace.
+        self.trace: deque[tuple[float, str, float]] = deque(maxlen=2000)
 
     # -- registers ---------------------------------------------------------
     def read(self, address: int) -> int:
@@ -137,7 +145,11 @@ class Venus:
         self.regs[address] = value
         self.writes += 1
         if address in (42000, 42010, 42020, 42021, 44002, 44003):
-            self._commands.append((time.monotonic() + DEAD_TIME_S, self._command()))
+            now = time.monotonic()
+            command = self._command()
+            self._commands.append((now + DEAD_TIME_S, command))
+            self.trace.append((now, f"write {address}", float(value)))
+            self.trace.append((now, "command", command))
         return True
 
     def _command(self) -> float:
@@ -281,6 +293,8 @@ class ModbusServer:
                 if protocol != 0 or length < 2:
                     break
                 pdu = await reader.readexactly(length - 1)
+                if MODBUS_LATENCY_S:
+                    await asyncio.sleep(MODBUS_LATENCY_S)
                 reply = _pdu(self.venus, pdu)
                 writer.write(
                     header[:4] + struct.pack(">H", len(reply) + 1) + header[6:7] + reply
@@ -356,7 +370,10 @@ async def http_control(
         status, reply = "200 OK", venus.state()
         if method == "POST" and path == "/load":
             venus.house_w = float(body["watts"])
+            venus.trace.append((time.monotonic(), "load", venus.house_w))
             reply = venus.state()
+        elif method == "GET" and path == "/trace":
+            reply = {"now": time.monotonic(), "events": list(venus.trace)}
         elif not (method == "GET" and path == "/state"):
             status, reply = "404 Not Found", {"error": "unknown path"}
         data = json.dumps(reply).encode()

@@ -29,5 +29,7 @@ services:
       P1_CONTROL_URL: http://172.30.28.11:8080
       MODBUS_PORT: "502"
       HTTP_PORT: "8090"
+      # Seconds the model waits before answering each Modbus request.
+      MODBUS_LATENCY_S: ${MODBUS_LATENCY_S:-0}
     command: ["python", "/opt/venus_e3_modbus.py"]
     restart: unless-stopped
