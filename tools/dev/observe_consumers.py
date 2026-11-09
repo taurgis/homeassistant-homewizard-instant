@@ -1,6 +1,6 @@
 """Configure OmniBattery and the Marstek local-API integration in the lab.
 
-The Home Assistant lab, the synthetic Modbus stand-in and, when it has booted,
+The Home Assistant lab, the Venus E 3.0 Modbus model and, when it has booted,
 the Renode Venus E 3.0 Control 151 emulator must already be running. This does
 not contact a physical battery or the user's Home Assistant.
 """
@@ -121,7 +121,7 @@ def setup_omnibattery(token: str) -> dict[str, Any]:
         "batteries": {"num_batteries": 1},
         "battery_brand": {"brand": "marstek"},
         "battery_connection": {
-            "name": "Synthetic Venus",
+            "name": "Venus E3",
             "host": "172.30.28.21",
             "port": 502,
             "slave_id": 1,
@@ -275,7 +275,7 @@ def main() -> None:
         "omnibattery_source": "https://github.com/ffunes/Omnibattery 39b052bdac2856aeab02db1a7d20124142284d71",
         "grid_sensor": POWER,
         "sign": "positive import, negative export, meter_inverted false",
-        "synthetic_modbus": "172.30.28.21:502 EMS register 100, not firmware",
+        "venus_e3_model": "172.30.28.21:502 tools/lab/venus_e3_modbus.py, Python model, not firmware",
         "omnibattery_flow": {
             k: omni.get(k) for k in ("type", "step_id", "reason", "errors")
         },

@@ -243,9 +243,14 @@ class MeterServer:
     ) -> None:
         # Like real firmware, only measurements stream; system fields such as
         # wifi_rssi_db and uptime_s change only on a one-time read.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time()
         while not socket.closed:
             interval = self.meter.faults.slow_interval or self.meter.push_interval
-            await asyncio.sleep(interval)
+            # Telegrams follow the smart meter's clock: a slow send does not
+            # push every later telegram back.
+            deadline = max(deadline + interval, loop.time())
+            await asyncio.sleep(deadline - loop.time())
             if socket.closed or self.meter.faults.hang or not subscribed:
                 continue
             fault = self.meter.fault_message()
@@ -341,13 +346,21 @@ class MeterServer:
 
     async def _overlay(self, request: web.Request) -> web.Response:
         body = await _body(request)
+        # "push": false only changes what the next scheduled telegram carries,
+        # the way a P1 port samples a changing load on its own clock.
+        push = body.get("push", True) is not False
         if body.get("reset"):
             self.meter.overlay.clear()
         else:
             self.meter.overlay.update(
-                {key: value for key, value in body.items() if key != "reset"}
+                {
+                    key: value
+                    for key, value in body.items()
+                    if key not in {"reset", "push"}
+                }
             )
-        await self._broadcast("measurement")
+        if push:
+            await self._broadcast("measurement")
         return _json({"overlay": self.meter.overlay})
 
     async def _uptime(self, request: web.Request) -> web.Response:
