@@ -97,6 +97,12 @@ class Meter:
         self.gas_value = self._gas_baseline()
         self.last_measurement: dict[str, Any] = {}
         self.last_system: dict[str, Any] = {}
+        self.last_push_unix: float | None = None
+        self.last_push_topic: str | None = None
+        self.last_push_power_w: Any = None
+        # When set, every measurement keeps this smart-meter timestamp so a
+        # repeated telegram can be told apart from one whose clock advanced.
+        self.frozen_timestamp: str | None = None
         self.sockets: set[Any] = set()
         self.transports: set[Any] = set()
         self._gas_value_set = False
@@ -122,7 +128,9 @@ class Meter:
             return 400, {"error": "user:invalid-name"}
         if not self.button_open():
             return 403, {"error": "user:creation-not-enabled"}
-        self.tokens = {token: user for token, user in self.tokens.items() if user != name}
+        self.tokens = {
+            token: user for token, user in self.tokens.items() if user != name
+        }
         token = secrets.token_hex(16).upper()
         self.tokens[token] = name
         self._save_tokens()
@@ -213,10 +221,14 @@ class Meter:
 
     def _advance(self, payload: dict[str, Any]) -> None:
         self.tick += 1
-        if "power_w" not in self.overlay and isinstance(payload.get("power_w"), (int, float)):
+        if "power_w" not in self.overlay and isinstance(
+            payload.get("power_w"), (int, float)
+        ):
             delta = round(math.sin(self.tick / 3) * 12, 1)
             payload["power_w"] = round(float(payload["power_w"]) + delta, 1)
-            if "power_l1_w" in payload and isinstance(payload["power_l1_w"], (int, float)):
+            if "power_l1_w" in payload and isinstance(
+                payload["power_l1_w"], (int, float)
+            ):
                 payload["power_l1_w"] = round(float(payload["power_l1_w"]) + delta, 1)
         power = payload.get("power_w")
         if isinstance(power, (int, float)):
@@ -245,7 +257,9 @@ class Meter:
         payload[key] = updated
 
     def _stamp(self, payload: dict[str, Any]) -> None:
-        stamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime())
+        stamp = self.frozen_timestamp or time.strftime(
+            "%Y-%m-%dT%H:%M:%S", time.localtime()
+        )
         payload["timestamp"] = stamp
         external = payload.get("external")
         if isinstance(external, list):
@@ -272,15 +286,26 @@ class Meter:
         if self.faults.unknown_topic:
             return {"type": "batteries", "data": {"mode": "zero"}}
         if self.faults.missing_fields:
-            return {"type": "device", "data": {"product_type": "HWE-P1", "product_name": "P1 Meter"}}
+            return {
+                "type": "device",
+                "data": {"product_type": "HWE-P1", "product_name": "P1 Meter"},
+            }
         if self.faults.null_fields:
-            return {"type": "measurement", "data": {"power_w": None, "energy_import_kwh": None}}
+            return {
+                "type": "measurement",
+                "data": {"power_w": None, "energy_import_kwh": None},
+            }
         if self.faults.wrong_types:
             return {"type": "measurement", "data": {"power_w": "high", "tariff": "two"}}
         if self.faults.out_of_range:
             return {
                 "type": "measurement",
-                "data": {"power_w": 1e12, "voltage_l1_v": -50, "frequency_hz": 5000, "tariff": 9},
+                "data": {
+                    "power_w": 1e12,
+                    "voltage_l1_v": -50,
+                    "frequency_hz": 5000,
+                    "tariff": 9,
+                },
             }
         if self.faults.identity_change:
             return {"type": "device", "data": self.device_payload()}
@@ -317,6 +342,14 @@ class Meter:
             if resume is not None:
                 resume()
 
+    def note_push(self, topic: str, data: dict[str, Any] | None) -> None:
+        """Record when a frame left the socket, for lab latency checks."""
+        self.pushes += 1
+        self.last_push_unix = time.time()
+        self.last_push_topic = topic
+        if isinstance(data, dict) and "power_w" in data:
+            self.last_push_power_w = data.get("power_w")
+
     def state(self) -> dict[str, Any]:
         return {
             "serial": self.serial,
@@ -328,6 +361,10 @@ class Meter:
             "tokens": len(self.tokens),
             "websockets": len(self.sockets),
             "pushes": self.pushes,
+            "last_push_unix": self.last_push_unix,
+            "last_push_topic": self.last_push_topic,
+            "last_push_power_w": self.last_push_power_w,
+            "frozen_timestamp": self.frozen_timestamp,
             "faults": self.faults.public(),
             "device": self.device_payload(),
             "measurement": self.last_measurement or self.measurement_payload(),

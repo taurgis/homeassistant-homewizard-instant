@@ -31,7 +31,9 @@ CONNECTION_ERRORS = (
     MissingField,
     InvalidFieldValue,
 )
-_STALE_CHECK_INTERVAL = timedelta(seconds=10)
+# Check often enough that a silent meter is unavailable inside the 65 s
+# window a grid controller such as OmniBattery still treats as live.
+_STALE_CHECK_INTERVAL = timedelta(seconds=5)
 # A connection must stay up this long before the reconnect delay starts at 1 s
 # again; a meter that accepts and then drops every connection backs off to 60 s.
 _STABLE_AFTER = 60
@@ -73,6 +75,7 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[CombinedModels]):
         self._unsubs: list[Callable[[], None]] = []
         self._stale = False
         self._connected_at = time.monotonic()
+        self._seen_generation = 0
 
     async def _async_update_data(self) -> CombinedModels:
         """Connect initially; subsequent refresh requests use cached push data."""
@@ -146,9 +149,22 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[CombinedModels]):
             self.last_update_success = False
             self.async_update_listeners()
 
+    def _report_generation(self) -> int:
+        """Return how many live measurement frames the socket has accepted."""
+        generation = getattr(self.api, "reported_generation", 0)
+        return generation if isinstance(generation, int) else 0
+
     @callback
     def _async_publish(self, data: CombinedModels) -> None:
-        """Forward a snapshot, skipping pushes that change nothing."""
+        """Forward a snapshot.
+
+        An equal payload is still published when it is a new frame on the open
+        socket. Home Assistant then refreshes ``last_reported`` without
+        ``force_update``, so the recorder does not store a duplicate row and
+        ``last_changed`` stays put. A grid controller that times freshness from
+        ``last_reported`` can tell a steady load from a dead meter. The
+        subscribe replay is not a new frame and does not get this refresh.
+        """
         if self._stale:
             if (
                 time.monotonic() - self.api.last_measurement
@@ -159,8 +175,15 @@ class HWEnergyDeviceUpdateCoordinator(DataUpdateCoordinator[CombinedModels]):
                 return
             self._stale = False
             LOGGER.info("HomeWizard measurements resumed")
+        generation = self._report_generation()
         if self.last_update_success and data == self.data:
+            if generation == self._seen_generation:
+                return
+            self._seen_generation = generation
+            LOGGER.debug("HomeWizard measurement confirmed with unchanged values")
+            self.async_update_listeners()
             return
+        self._seen_generation = generation
         previous = self.data
         self.async_set_updated_data(data)
         if (

@@ -82,7 +82,25 @@ Faults, posted as `{"name":"<fault>"}`:
 | `restart` | Restarts the HTTPS server. |
 | `tls_change` | Restarts HTTPS with a certificate the lab CA did not sign. |
 
-`POST /clear` removes the flags and restores the trusted certificate. `POST /push` with `{"topic":"system"}` sends a system snapshot immediately. `POST /uptime` with `{"seconds":10}` simulates a reboot. `POST /overlay` merges fields into the next measurement; `{"reset":true}` removes them.
+`POST /clear` removes the flags and restores the trusted certificate. `POST /push` with `{"topic":"system"}` sends a system snapshot immediately. `POST /uptime` with `{"seconds":10}` simulates a reboot. `POST /overlay` merges fields into the next measurement; `{"reset":true}` removes them. `POST /clock` with `{"frozen":true}` keeps the smart-meter timestamp still so later pushes are identical; `{"frozen":false}` lets it advance again. `GET /state` includes `last_push_unix`, the host time of the last frame that left the socket.
+
+## OmniBattery and a Venus E 3.0
+
+Two different batteries can be attached to this lab. They are not interchangeable.
+
+**Firmware, Venus E 3.0 Control 151.** [has-marstek-local-api](https://github.com/taurgis/has-marstek-local-api) runs the vendor image `VNSEE3-0_ems_app_0151_0928_094421.bin` in Renode (`tools/firmware_emulator`). The catalog entry is version 151, SHA-256 `a2f566ebdf3f94a5b2b171e071bd65237d0cd0ae68035dab5fc34734cf250148`. That process serves the local API on UDP 30000. Its README states that TCP listen sockets, including Modbus TCP on port 502, are not delivered to the firmware. [OmniBattery](https://github.com/ffunes/Omnibattery) 1.5.0 (`custom_components/omnibattery/manifest.json`) drives Marstek only through Modbus TCP (`drivers/marstek.py`). It cannot command this emulator. The Marstek local-API integration from that same repository can. Build the image in the clone (`docker build -f tools/firmware_emulator/Dockerfile -t marstek-fw-emulator:local .`) and start it with this repo's overlay:
+
+```bash
+export MARSTEK_REPO=/path/to/has-marstek-local-api
+export OMNIBATTERY_REPO=/path/to/Omnibattery
+docker compose -f docker-compose.yml -f docker-compose.consumers.yml up -d venus-e3-151 venus-e3-151-ct
+```
+
+Add the Marstek integration and point it at `172.30.28.20`. What it reports (device name, firmware version, mode) is the firmware's own local API. It is not an OmniBattery PD verdict, and it is not a claim about a physical battery.
+
+**Synthetic Modbus stand-in.** `tools/lab/synthetic_venus_modbus.py` is plain Python. The EMS register is 100 so it cannot be read as firmware 151. `synthetic-venus` in the overlay listens on `172.30.28.21:502` and sets the 1-phase meter's grid power to `600 + battery_power` watts (positive charge, negative discharge). OmniBattery can use that battery and `sensor.p1_meter_power` as the grid sensor. A stable PD-quality state from that setup is evidence about this pipeline, not about Control 151.
+
+If containers on the lab bridge can reach published host ports but not each other, bridged packets are being filtered. `sysctl net.bridge.bridge-nf-call-iptables=0` clears that on a host where Docker's bridge netfilter hook drops them.
 
 The control API has no authentication. Compose publishes it on `127.0.0.1` only. A meter started on the host binds to `127.0.0.1` unless `BIND_HOST` is set. Compose sets `BIND_HOST=0.0.0.0` so Home Assistant on the lab network can reach the meters; the host ports stay on localhost.
 

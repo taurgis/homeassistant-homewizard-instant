@@ -1,0 +1,65 @@
+# Optional lab pieces for the v2 workstream. They are not started by
+# `docker compose up` on docker-compose.yml alone.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.consumers.yml up -d
+#
+# Venus E 3.0 Control 151 is the image built from taurgis/has-marstek-local-api
+# (Renode, unmodified firmware). Build it in that clone; do not copy the blobs
+# into this repository:
+#
+#   docker build -f tools/firmware_emulator/Dockerfile -t marstek-fw-emulator:local .
+#
+# synthetic-venus is a Python Modbus stand-in. It is not that firmware.
+
+services:
+  homeassistant:
+    volumes:
+      - ${MARSTEK_REPO:?set MARSTEK_REPO}/custom_components/marstek:/config/custom_components/marstek:ro
+      - ${OMNIBATTERY_REPO:?set OMNIBATTERY_REPO}/custom_components/omnibattery:/config/custom_components/omnibattery:ro
+
+  venus-e3-151:
+    image: ${MARSTEK_FW_IMAGE:-marstek-fw-emulator:local}
+    init: true
+    stop_grace_period: 20s
+    networks:
+      lab:
+        ipv4_address: 172.30.28.20
+    volumes:
+      - venus_e3_151:/state
+    command:
+      - --firmware
+      - VNSE3-0:151
+      - --ble-mac
+      - "02:e0:00:00:00:70"
+      - --wifi-mac
+      - "02:e1:00:00:00:70"
+      - --soc
+      - "62"
+      - --mips
+      - "40"
+
+  venus-e3-151-ct:
+    image: ghcr.io/tomquist/astrameter:2.3.1@sha256:72329da6a63704fb68be7668c494640639c9b28cfbf3bae7588ac1f13a36fb0e
+    network_mode: service:venus-e3-151
+    depends_on:
+      venus-e3-151:
+        condition: service_healthy
+    volumes:
+      - ${MARSTEK_REPO}/tools/firmware_emulator/astrameter/config.ini:/app/config.ini:ro
+    restart: on-failure
+
+  synthetic-venus:
+    image: python:3.13-slim
+    networks:
+      lab:
+        ipv4_address: 172.30.28.21
+    volumes:
+      - ../tools/lab/synthetic_venus_modbus.py:/opt/synthetic_venus_modbus.py:ro
+    environment:
+      HOUSE_LOAD_W: "600"
+      P1_CONTROL_URL: http://172.30.28.11:8080
+      MODBUS_PORT: "502"
+    command: ["python", "/opt/synthetic_venus_modbus.py"]
+
+volumes:
+  venus_e3_151:

@@ -31,7 +31,8 @@ The integration uses two transports. Both verify the certificate chain against H
 - `RequestError`, `ClientError`, `TimeoutError`, parse errors: mark entities unavailable with the `communication_error` translation key and reconnect with 1-60 s backoff.
 - Any other exception in the reader: logged once with a traceback, then handled like a connection error. The reader must never die silently.
 - Invalid or null **fields** are dropped individually (`_sanitize`); only unparseable **frames** count toward the 30-frame invalid limit.
-- No measurement for `STALE_AFTER` (60 s) while the socket is up: entities become unavailable (`stale_data`) until measurements resume.
+- No measurement for `STALE_AFTER` (60 s) while the socket is up: entities become unavailable (`stale_data`) until measurements resume. The check runs every 5 s.
+- A measurement frame on the open socket refreshes freshness even when the payload is unchanged, and the coordinator asks entities to write state so `last_reported` moves. Do not set `force_update`. The snapshot replayed during `connect()` does not refresh freshness when it equals the previous measurement.
 
 ## Device Limits
 
