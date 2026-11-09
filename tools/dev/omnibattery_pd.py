@@ -12,7 +12,8 @@ Then, with aiohttp installed:
 
 The script onboards a fresh Home Assistant as dev / devpass1, pairs
 homewizard_instant with the 1-phase meter, adds OmniBattery with the Venus E 3.0
-Modbus model, and then runs three phases: a steady house load, load steps
+Modbus model (or, with ``--battery-host 172.30.28.22``, Control firmware 151 in
+the Renode emulator; see docs/development.md), and then runs three phases: a steady house load, load steps
 (including export, so the battery charges), and one dropped meter connection.
 It records every verdict of ``sensor.omnibattery_pd_control_quality`` and the
 interval between reports of ``sensor.p1_meter_power``. Nothing here talks to a
@@ -336,7 +337,13 @@ async def main() -> None:
     parser.add_argument("--minutes", type=float, default=10, help="steady phase")
     parser.add_argument("--step-seconds", type=float, default=120)
     parser.add_argument("--out", default="/tmp/omnibattery-pd.json")
+    parser.add_argument(
+        "--battery-host",
+        default="172.30.28.21",
+        help="Modbus TCP host: the Python model, or 172.30.28.22 for the firmware",
+    )
     args = parser.parse_args()
+    OMNIBATTERY_STEPS["battery_connection"]["host"] = args.battery_host
 
     async with aiohttp.ClientSession() as session:
         lab = Lab(session)
@@ -345,6 +352,7 @@ async def main() -> None:
         paired = await lab.pair_meter()
         await lab.wait_state(POWER, 120)
         await lab.call("POST", f"{VENUS}/load", {"watts": 450})
+        battery = (await lab.call("GET", f"{VENUS}/state"))["model"]
         omni = await lab.add_omnibattery()
         print(f"meter {paired}, omnibattery {omni}", flush=True)
         await lab.wait_state(QUALITY, 180)
@@ -398,10 +406,7 @@ async def main() -> None:
     report = {
         "summary": summary,
         "samples": samples,
-        "note": (
-            "Venus E 3.0 is tools/lab/venus_e3_modbus.py, a Python model of the "
-            "Control 151 Modbus surface, not the firmware."
-        ),
+        "battery": battery,
     }
     await asyncio.to_thread(
         Path(args.out).write_text, json.dumps(report, indent=2), "utf-8"

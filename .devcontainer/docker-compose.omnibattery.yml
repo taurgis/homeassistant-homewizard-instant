@@ -6,7 +6,8 @@
 #   docker compose -f docker-compose.yml -f docker-compose.omnibattery.yml up -d
 #
 # venus-e3 is a Python model of the Modbus surface of Control firmware 151
-# (tools/lab/venus_e3_modbus.py). It is not the firmware.
+# (tools/lab/venus_e3_modbus.py). It is not the firmware; add
+# docker-compose.firmware151.yml to run the real 151 image instead.
 
 services:
   homeassistant:

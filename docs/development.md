@@ -86,21 +86,9 @@ Faults, posted as `{"name":"<fault>"}`:
 
 ## OmniBattery and a Venus E 3.0
 
-Two different batteries can be attached to this lab. They are not interchangeable.
+OmniBattery drives a Venus E 3.0 over Modbus TCP. On a Venus E 3.0 that server is part of the Control firmware (socket 0 of its CH395 Ethernet chip, `Task_Modbus_tcp` in the 151 image), not the BMS, so no BMS firmware is involved. The lab can put either of two batteries behind OmniBattery. Both play the same house: grid power is `house load - ac_power` and goes to the 1-phase meter with `{"push": false}` on `/overlay`, so the meter reports it on its own 1 s telegram clock, as a P1 port would. `GET http://127.0.0.1:8090/state` shows the plant; `POST /load` with `{"watts": 900}` changes the house load.
 
-**Firmware, Venus E 3.0 Control 151.** [has-marstek-local-api](https://github.com/taurgis/has-marstek-local-api) runs the vendor image `VNSEE3-0_ems_app_0151_0928_094421.bin` in Renode (`tools/firmware_emulator`). The catalog entry is version 151, SHA-256 `a2f566ebdf3f94a5b2b171e071bd65237d0cd0ae68035dab5fc34734cf250148`. That process serves the local API on UDP 30000. Its README states that TCP listen sockets, including Modbus TCP on port 502, are not delivered to the firmware. [OmniBattery](https://github.com/ffunes/Omnibattery) 1.5.0 (`custom_components/omnibattery/manifest.json`) drives Marstek only through Modbus TCP (`drivers/marstek.py`). It cannot command this emulator. The Marstek local-API integration from that same repository can. Build the image in the clone (`docker build -f tools/firmware_emulator/Dockerfile -t marstek-fw-emulator:local .`) and start it with this repo's overlay:
-
-```bash
-export MARSTEK_REPO=/path/to/has-marstek-local-api
-export OMNIBATTERY_REPO=/path/to/Omnibattery
-docker compose -f docker-compose.yml -f docker-compose.consumers.yml up -d venus-e3-151 venus-e3-151-ct
-```
-
-Add the Marstek integration and point it at `172.30.28.20`. What it reports (device name, firmware version, mode) is the firmware's own local API. It is not an OmniBattery PD verdict, and it is not a claim about a physical battery.
-
-**Venus E 3.0 Modbus model, with OmniBattery.** OmniBattery needs Modbus TCP, which the firmware emulator cannot serve. On a Venus E 3.0 that server is part of the Control firmware (socket 0 of its CH395 Ethernet chip, `Task_Modbus_tcp` in the 151 image), not the BMS, so no BMS firmware is involved; the emulator's `ch395.py` simply does not bridge TCP. `tools/lab/venus_e3_modbus.py` is a plain-Python model of the registers OmniBattery 1.5.0 uses for `battery_version: v3`. From the 151 image it copies the device name `VNSE3-0`, EMS version 151, the 800 W discharge cap (the image rejects "max discharge power ... over 800W") and the rule that 44002/44003 only accept 800 or 2500. Register numbers and signs follow OmniBattery's `registers_v3.py`: `battery_power` (30001) is positive while charging, `ac_power` (30006) positive while discharging. Force mode only acts while RS485 control (42000 = 0x55AA) is on. The inverter follows a set-point after 0.6 s and ramps at 1000 W/s (`DEAD_TIME_S`, `RAMP_W_PER_S`). It is a model, so a verdict from it is evidence about this integration and OmniBattery's loop, not about firmware 151.
-
-The model also plays the house: grid power is `house load - ac_power` and goes to the 1-phase meter with `{"push": false}` on `/overlay`, so the meter reports it on its own 1 s telegram clock, as a P1 port would. `GET http://127.0.0.1:8090/state` shows the plant; `POST /load` with `{"watts": 900}` changes the house load.
+**Venus E 3.0 Modbus model** (`tools/lab/venus_e3_modbus.py`, `172.30.28.21:502`). A plain-Python model of the registers [OmniBattery](https://github.com/ffunes/Omnibattery) 1.5.0 uses for `battery_version: v3`. It copies what the 151 image showed in the emulator: device name `VNSE3-0` (31000), EMS version 151 (30200), `ac_power` (30006) int16 and positive while discharging, force mode (42010) only acting while RS485 control (42000) is 0x55AA, and 44002/44003 storing any value. Discharge is capped at 800 W (the image rejects "max discharge power ... over 800W"). The inverter follows a set-point after 0.6 s and ramps at 1000 W/s (`DEAD_TIME_S`, `RAMP_W_PER_S`). It is a model, so a verdict from it is evidence about this integration and OmniBattery's loop, not about firmware 151.
 
 ```bash
 export OMNIBATTERY_REPO=/path/to/Omnibattery
@@ -108,7 +96,26 @@ docker compose -f docker-compose.yml -f docker-compose.omnibattery.yml up -d
 python3 tools/dev/omnibattery_pd.py --minutes 10 --out /tmp/omnibattery-pd.json
 ```
 
-`omnibattery_pd.py` (needs `aiohttp`) onboards a fresh Home Assistant as `dev` / `devpass1`, pairs the 1-phase meter, adds OmniBattery with the model at `172.30.28.21:502`, and then holds a steady 450 W house, steps the load (700 W, 250 W, -600 W export so the battery charges, back to 450 W), and drops the meter connection once. It writes every `sensor.omnibattery_pd_control_quality` verdict and the report cadence of `sensor.p1_meter_power` per phase.
+**Control firmware 151** (`172.30.28.22:502`). [has-marstek-local-api](https://github.com/taurgis/has-marstek-local-api) runs the vendor image `VNSEE3-0_ems_app_0151_0928_094421.bin` (catalog version 151, SHA-256 `a2f566ebdf3f94a5b2b171e071bd65237d0cd0ae68035dab5fc34734cf250148`) in Renode. With `--ethernet` and the emulator's CH395 TCP bridge, the firmware's own Modbus code answers on port 502. `docker-compose.firmware151.yml` starts it on the lab network and switches `venus-e3` to firmware mode (`INVERTER_URL`): it serves no Modbus, reads the inverter output from the emulator's grid meter (`can_peers.py`, house load 0) and only plays the house.
+
+```bash
+export OMNIBATTERY_REPO=/path/to/Omnibattery
+export MARSTEK_REPO=/path/to/has-marstek-local-api   # with the CH395 TCP bridge
+docker compose -f docker-compose.yml -f docker-compose.omnibattery.yml \
+    -f docker-compose.firmware151.yml up -d
+python3 tools/dev/omnibattery_pd.py --battery-host 172.30.28.22 --out /tmp/omnibattery-pd-151.json
+```
+
+The first start writes a fresh EEPROM and reboots once (about a minute). Measured against the emulated 151 image:
+
+- Each Modbus request takes about 300 ms, except the first after a pause; OmniBattery's 150 ms v3 message gap comes on top.
+- The image serves one Modbus client at a time.
+- A force-discharge write shows up in `sensor.p1_meter_power` about 1 s later: the Modbus write, the emulated inverter's 1 s step, then the next telegram.
+- 32104 holds the SoC, as the Local API does. **37005 (OmniBattery's v3 SoC) and 30001 (battery power) read 0**, so OmniBattery sees an empty battery and may refuse to discharge. Whether a physical unit fills them is not known from the emulator.
+
+`docker-compose.consumers.yml` also has `venus-e3-151` at `172.30.28.20` for the Marstek local-API integration; that one has no Ethernet and no Modbus.
+
+`omnibattery_pd.py` (needs `aiohttp`) onboards a fresh Home Assistant as `dev` / `devpass1`, pairs the 1-phase meter, adds OmniBattery with the battery at `--battery-host`, and then holds a steady 450 W house, steps the load (700 W, 250 W, -600 W export so the battery charges, back to 450 W), and drops the meter connection once. It writes every `sensor.omnibattery_pd_control_quality` verdict and the report cadence of `sensor.p1_meter_power` per phase.
 
 Two things to know when measuring freshness yourself. Home Assistant does not deliver `state_reported` through `subscribe_events`, and `/api/states` serves a cached `last_reported` after a report that did not change the state. Read `{{ states.sensor.p1_meter_power.last_reported }}` through `/api/template` instead; that is the attribute OmniBattery reads.
 

@@ -53,7 +53,7 @@ Disconnects mark entities unavailable and trigger reconnect attempts with backof
 
 OmniBattery runs a control cycle when the grid sensor's state changes and uses unchanged reports only to time the meter. Its event-triggered cycles are throttled to one per **PD minimum cycle interval** (1.0 s by default). That equals a DSMR 5 meter's cadence, so a telegram arriving a few milliseconds early is skipped and the next 2 s safety tick runs the cycle instead. If that shows up as slow tracking, set the interval a little below the meter cadence, for example 0.8 s.
 
-OmniBattery talks to a Marstek battery over Modbus TCP. It does not speak the Venus local API. The lab notes in `docs/development.md` separate the firmware emulator from the Python model of a Venus E 3.0's Modbus registers.
+OmniBattery talks to a Marstek battery over Modbus TCP. It does not speak the Venus local API. The lab in `docs/development.md` can put either a Python model of a Venus E 3.0's Modbus registers or the vendor Control 151 firmware (emulated in Renode, serving Modbus itself) behind OmniBattery.
 
 ### Upgrading from API v1
 

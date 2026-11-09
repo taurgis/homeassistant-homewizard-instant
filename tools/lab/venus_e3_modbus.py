@@ -1,30 +1,35 @@
 """Modbus TCP model of a Venus E 3.0 on Control firmware 151, plus a house.
 
-This is Python, not the firmware. Control 151 serves Modbus TCP from socket 0
-of its CH395 Ethernet chip (``Task_Modbus_tcp``, ``CH395TCPListen``). The
-Renode emulator in taurgis/has-marstek-local-api runs that image but does not
-bridge TCP, so a Modbus client cannot reach the firmware's own register code.
-The BMS is not involved: it talks to the Control board over CAN, and the
-emulator models it in Python as well.
+Two modes:
 
-What is copied from the 151 image (VNSEE3-0_ems_app_0151_0928_094421.bin,
-SHA-256 a2f566eb...0148):
+* **Model** (default): this script is the battery. It serves a Python copy of
+  the Modbus surface on ``MODBUS_PORT``.
+* **Firmware** (``INVERTER_URL`` set): the real Control 151 image runs in the
+  Renode emulator of taurgis/has-marstek-local-api with ``--ethernet`` and
+  serves Modbus TCP itself, from socket 0 of its emulated CH395. This script
+  then serves no Modbus. It polls the emulator's grid meter
+  (``can_peers.py --meter-port``, started with ``--house-load 0,0,0``) for the
+  inverter output and only plays the house.
 
-* device name ``VNSE3-0`` and EMS version 151 (catalog version);
-* discharge capped at 800 W (the image rejects "max discharge power ... over
-  800W"); charge at 2500 W;
-* 44002/44003 accept only 800 or 2500 and answer anything else with Modbus
-  exception 3, as OmniBattery documents for v2/v3.
+In both modes grid power is ``house load - ac_power`` (import positive) and is
+written to the P1 emulator without forcing a push, so the meter reports it on
+its own telegram cadence, like a real P1 port.
 
-What is modelled from OmniBattery 1.5.0's v3 driver (``registers_v3.py``,
-``drivers/marstek.py``): the register numbers, int16 power, ``battery_power``
-positive while charging, ``ac_power`` positive while discharging, and force
-mode only taking effect while RS485 control (0x55AA) is on.
+What the model copies from the 151 image (VNSEE3-0_ems_app_0151_0928_094421.bin,
+SHA-256 a2f566eb...0148), checked against that image in the emulator:
+
+* device name ``VNSE3-0`` (31000) and EMS version 151 (30200);
+* ``ac_power`` (30006) int16, positive while discharging; SoC in 32104;
+* force mode (42010) only takes effect while RS485 control (42000) is 0x55AA;
+* 44002/44003 store any value; discharge is still capped at 800 W (the image
+  rejects "max discharge power ... over 800W"), charge at 2500 W.
+
+OmniBattery 1.5.0's v3 map reads SoC from 37005 and battery power from 30001.
+The emulated 151 image answers 0 for both while 32104 and the Local API report
+the real SoC. The model fills them, so OmniBattery runs against it.
 
 The plant: the inverter follows the set-point after ``DEAD_TIME_S`` and ramps
-at ``RAMP_W_PER_S``. Grid power is ``house load - ac_power`` (import positive)
-and is written to the P1 emulator without forcing a push, so the meter reports
-it on its own telegram cadence, like a real P1 port.
+at ``RAMP_W_PER_S``.
 
 Control on ``HTTP_PORT`` (plain HTTP, no auth, lab only):
 
@@ -51,6 +56,7 @@ P1_CONTROL_URL = os.environ.get("P1_CONTROL_URL", "http://127.0.0.1:8082")
 LISTEN = os.environ.get("MODBUS_LISTEN", "0.0.0.0")
 PORT = int(os.environ.get("MODBUS_PORT", "502"))
 HTTP_PORT = int(os.environ.get("HTTP_PORT", "8090"))
+INVERTER_URL = os.environ.get("INVERTER_URL", "")
 DEAD_TIME_S = float(os.environ.get("DEAD_TIME_S", "0.6"))
 RAMP_W_PER_S = float(os.environ.get("RAMP_W_PER_S", "1000"))
 TICK_S = 0.1
@@ -128,8 +134,6 @@ class Venus:
     def write(self, address: int, value: int) -> bool:
         """Store a holding register; False means exception 3."""
         value &= 0xFFFF
-        if address in (44002, 44003) and value not in (800, 2500):
-            return False
         self.regs[address] = value
         self.writes += 1
         if address in (42000, 42010, 42020, 42021, 44002, 44003):
@@ -171,6 +175,13 @@ class Venus:
         self.soc_wh = max(0.0, min(CAPACITY_WH, self.soc_wh))
         self._publish()
 
+    def follow(self, url: str) -> None:
+        """Firmware mode: take ``ac_power`` from the emulator's grid meter."""
+        with urllib.request.urlopen(url, timeout=1) as response:
+            phases = json.loads(response.read())
+        # can_peers serves house load minus inverter output; the load is 0.
+        self.ac_w = -float(sum(phases[p] for p in "abc"))
+
     def _publish(self) -> None:
         ac = round(self.ac_w)
         cell = -round(self.ac_w / 0.95) if ac > 0 else -round(self.ac_w * 0.95)
@@ -191,6 +202,14 @@ class Venus:
         return self.house_w + self._noise
 
     def state(self) -> dict[str, Any]:
+        if INVERTER_URL:
+            # The firmware owns the registers; only the plant is known here.
+            return {
+                "model": f"Control firmware 151 in Renode, inverter from {INVERTER_URL}",
+                "house_w": self.house_w,
+                "ac_power_w": round(self.ac_w),
+                "grid_w": round(self.grid_w, 1),
+            }
         return {
             "model": "Venus E 3.0 Modbus model (Python, not firmware)",
             "ems_version_register": self.read(30200),
@@ -290,7 +309,16 @@ async def plant_loop(venus: Venus) -> None:
     while True:
         await asyncio.sleep(TICK_S)
         now = time.monotonic()
-        venus.step(now - previous)
+        if INVERTER_URL:
+            try:
+                await asyncio.to_thread(venus.follow, INVERTER_URL)
+            except (OSError, ValueError, KeyError) as err:
+                if now - last_error > 30:
+                    print(f"inverter poll failed: {err}", flush=True)
+                    last_error = now
+                continue
+        else:
+            venus.step(now - previous)
         previous = now
         venus.grid_w = venus.house(now) - venus.ac_w
         grid = round(venus.grid_w, 1)
@@ -346,11 +374,20 @@ async def http_control(
 
 async def main() -> None:
     venus = Venus()
-    modbus = ModbusServer(venus)
-    server = await asyncio.start_server(modbus.client, LISTEN, PORT)
     control = await asyncio.start_server(
         lambda r, w: http_control(venus, r, w), LISTEN, HTTP_PORT
     )
+    if INVERTER_URL:
+        print(
+            f"House for Control firmware 151, inverter from {INVERTER_URL}, "
+            f"control :{HTTP_PORT}, house {HOUSE_LOAD_W:.0f} W.",
+            flush=True,
+        )
+        async with control:
+            await plant_loop(venus)
+        return
+    modbus = ModbusServer(venus)
+    server = await asyncio.start_server(modbus.client, LISTEN, PORT)
     print(
         f"Venus E 3.0 Modbus model on {LISTEN}:{PORT}, control :{HTTP_PORT}, "
         f"EMS register {EMS_VERSION}, house {HOUSE_LOAD_W:.0f} W. "

@@ -1,0 +1,66 @@
+# Control firmware 151 in place of the Python Venus model. Layer it on top of
+# the OmniBattery file:
+#
+#   export OMNIBATTERY_REPO=/path/to/Omnibattery
+#   export MARSTEK_REPO=/path/to/has-marstek-local-api
+#   docker compose -f docker-compose.yml -f docker-compose.omnibattery.yml \
+#       -f docker-compose.firmware151.yml up -d
+#
+# marstek-fw runs the vendor image VNSEE3-0_ems_app_0151 in the Renode emulator
+# of taurgis/has-marstek-local-api with its CH395 Ethernet chip on the lab
+# network. The firmware serves Modbus TCP on 172.30.28.22:502 itself; that
+# needs the emulator's CH395 TCP bridge. Its Wi-Fi side (Local API, UDP 30000)
+# sits on a network of its own, since each side needs its own address.
+#
+# venus-e3 no longer serves Modbus: it reads the inverter output from the
+# emulator's grid meter (house load 0) and writes house load minus that
+# output to the P1 meter. Point OmniBattery at 172.30.28.22
+# (tools/dev/omnibattery_pd.py --battery-host 172.30.28.22).
+
+services:
+  marstek-fw:
+    build:
+      context: ${MARSTEK_REPO:?set MARSTEK_REPO}
+      dockerfile: tools/firmware_emulator/Dockerfile
+    image: marstek-fw-emulator:local
+    init: true
+    stop_grace_period: 20s
+    networks:
+      marstek_wifi:
+        ipv4_address: 172.30.29.20
+      lab:
+        ipv4_address: 172.30.28.22
+    volumes:
+      - marstek_fw_state:/state
+    command:
+      - --firmware
+      - VNSE3-0:151
+      - --gateway
+      - 172.30.29.1
+      - --ethernet
+      - --eth-ip
+      - 172.30.28.22
+      - --eth-gateway
+      - 172.30.28.1
+      - --house-load
+      - 0,0,0
+      - --soc
+      - "60"
+      - --meter-bind
+      - 0.0.0.0
+      - --meter-port
+      - "8099"
+    restart: unless-stopped
+
+  venus-e3:
+    environment:
+      INVERTER_URL: http://172.30.28.22:8099
+
+networks:
+  marstek_wifi:
+    ipam:
+      config:
+        - subnet: 172.30.29.0/24
+
+volumes:
+  marstek_fw_state:
