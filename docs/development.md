@@ -96,15 +96,24 @@ docker compose -f docker-compose.yml -f docker-compose.omnibattery.yml up -d
 python3 tools/dev/omnibattery_pd.py --minutes 10 --out /tmp/omnibattery-pd.json
 ```
 
-**Control firmware 151** (`172.30.28.22:502`). [has-marstek-local-api](https://github.com/taurgis/has-marstek-local-api) runs the vendor image `VNSEE3-0_ems_app_0151_0928_094421.bin` (catalog version 151, SHA-256 `a2f566ebdf3f94a5b2b171e071bd65237d0cd0ae68035dab5fc34734cf250148`) in Renode. With `--ethernet` and the emulator's CH395 TCP bridge, the firmware's own Modbus code answers on port 502. `docker-compose.firmware151.yml` starts it on the lab network and switches `venus-e3` to firmware mode (`INVERTER_URL`): it serves no Modbus, reads the inverter output from the emulator's grid meter (`can_peers.py`, house load 0) and only plays the house.
+**Control firmware 151** (`172.30.28.22:502`). [has-marstek-local-api](https://github.com/taurgis/has-marstek-local-api) runs the vendor image `VNSEE3-0_ems_app_0151_0928_094421.bin` (catalog version 151, SHA-256 `a2f566ebdf3f94a5b2b171e071bd65237d0cd0ae68035dab5fc34734cf250148`) in Renode. With `--ethernet` and the emulator's CH395 TCP bridge, the firmware's own Modbus code answers on port 502. `docker-compose.firmware151.yml` builds the emulator image from a pinned commit of that repository (no second clone needed), starts it on the lab network, and runs `venus-e3` in firmware mode (`INVERTER_URL`): it serves no Modbus, reads the inverter output from the emulator's grid meter (`can_peers.py`, house load 0) and only plays the house.
+
+Battery and meter only, for any Modbus client or an OmniBattery you install yourself:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.firmware151.yml up -d
+```
+
+With OmniBattery mounted and the PD run:
 
 ```bash
 export OMNIBATTERY_REPO=/path/to/Omnibattery
-export MARSTEK_REPO=/path/to/has-marstek-local-api   # with the CH395 TCP bridge
 docker compose -f docker-compose.yml -f docker-compose.omnibattery.yml \
     -f docker-compose.firmware151.yml up -d
 python3 tools/dev/omnibattery_pd.py --battery-host 172.30.28.22 --out /tmp/omnibattery-pd-151.json
 ```
+
+Set `MARSTEK_FW_CONTEXT` to a local has-marstek-local-api clone (or another git ref) to build the emulator from there. Behind a TLS-intercepting proxy, set `MARSTEK_BUILD_CA` to the proxy's CA bundle. Compose's bake builder only reads that file inside `.devcontainer/` (`*.crt` there is git-ignored), or pass `--allow`.
 
 The first start writes a fresh EEPROM and reboots once (about a minute). Measured against the emulated 151 image:
 
