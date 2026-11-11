@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.4
+
+### Patch Changes
+
+- c959880: Correct the quality-scale checklist, point logger settings at the HomeWizard Energy library, and document the entities this integration creates.
+- 90b6dbe: Fix external meter links to use the parent device id so Home Assistant stops logging the via_device deprecation warning.
+
 ## 1.0.3
 
 ### Patch Changes
