@@ -1,4 +1,4 @@
-# Lab Home Assistant plus two emulated P1 meters.
+# Lab Home Assistant plus two emulated P1 meters and a 3-phase kWh meter.
 # Default image is current Home Assistant. For the documented minimum:
 #   HA_IMAGE_TAG=2026.8.0 docker compose up -d --build
 
@@ -62,6 +62,33 @@ services:
     ports:
       - "127.0.0.1:8444:443"
       - "127.0.0.1:8082:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  meter-kwh3:
+    build: ../tools/mock_device
+    depends_on:
+      ca:
+        condition: service_completed_successfully
+    environment:
+      METER_SERIAL: "5c2faf000001"
+      METER_PROFILE: kwh3
+      BIND_HOST: 0.0.0.0
+      CA_DIR: /certs
+      HTTPS_PORT: "443"
+      CONTROL_PORT: "8080"
+    volumes:
+      - certs:/certs:ro
+    networks:
+      lab:
+        ipv4_address: 172.30.28.12
+    ports:
+      - "127.0.0.1:8445:443"
+      - "127.0.0.1:8083:8080"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"]
       interval: 2s

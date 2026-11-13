@@ -238,3 +238,119 @@ def test_device_certificate_matches_a_real_p1_meter(tmp_path: Path) -> None:
     )
     with pytest.raises(ssl.SSLCertVerificationError, match="Hostname mismatch"):
         _handshake(bare, bare_key, ca_cert, hostname(serial))
+
+
+# Every field a physical SDM630-wifi (firmware 5.0305) sent in its measurements.
+SDM630_FIELDS = {
+    "energy_import_kwh",
+    "energy_export_kwh",
+    "power_w",
+    *(f"power_l{phase}_w" for phase in (1, 2, 3)),
+    *(f"voltage_l{phase}_v" for phase in (1, 2, 3)),
+    "current_a",
+    *(f"current_l{phase}_a" for phase in (1, 2, 3)),
+    "apparent_current_a",
+    *(f"apparent_current_l{phase}_a" for phase in (1, 2, 3)),
+    "reactive_current_a",
+    *(f"reactive_current_l{phase}_a" for phase in (1, 2, 3)),
+    "apparent_power_va",
+    *(f"apparent_power_l{phase}_va" for phase in (1, 2, 3)),
+    "reactive_power_var",
+    *(f"reactive_power_l{phase}_var" for phase in (1, 2, 3)),
+    *(f"power_factor_l{phase}" for phase in (1, 2, 3)),
+    "frequency_hz",
+}
+# The 1-phase kWh meter fields in the HomeWizard API v2 measurement docs.
+KWH1_FIELDS = {
+    "energy_import_kwh",
+    "energy_export_kwh",
+    "power_w",
+    "voltage_v",
+    "current_a",
+    "apparent_current_a",
+    "reactive_current_a",
+    "apparent_power_va",
+    "reactive_power_var",
+    "power_factor",
+    "frequency_hz",
+}
+
+
+@pytest.mark.parametrize("steady", [True, False])
+def test_kwh_meter_matches_a_real_sdm630(steady: bool) -> None:
+    meter = Meter("5c2faf000001", "kwh3")
+    meter.steady = steady
+    assert meter.device_payload() == {
+        "product_type": "SDM630-wifi",
+        "product_name": "kWh Meter 3-phase",
+        "serial": "5c2faf000001",
+        "firmware_version": "5.0305",
+        "api_version": "2.3.0",
+    }
+    reading = meter.measurement_payload()
+    # No smart-meter clock, tariff, DSMR counters or external meters.
+    assert set(reading) == SDM630_FIELDS
+    assert reading["energy_import_kwh"] == 0
+    assert "status_led_brightness_pct" not in meter.system_payload()
+
+    meter.set_profile("kwh3_solar")
+    assert set(meter.measurement_payload()) == SDM630_FIELDS
+    assert meter.measurement_payload()["power_w"] < 0
+    with pytest.raises(ValueError, match="HWE-P1"):
+        meter.set_profile("3phase")
+    meter.apply_fault("missing_fields")
+    assert meter.fault_message()["data"]["product_type"] == "SDM630-wifi"
+
+
+def test_kwh1_has_the_documented_fields() -> None:
+    meter = Meter("5c2faf000002", "kwh1")
+    assert meter.device_payload()["product_type"] == "HWE-KWH1"
+    assert set(meter.measurement_payload()) == KWH1_FIELDS
+    with pytest.raises(ValueError, match="SDM630-wifi"):
+        meter.set_profile("kwh3")
+
+
+def test_p1_meter_keeps_its_identity_and_clock() -> None:
+    meter = Meter("aabbccddeeff", "3phase")
+    assert meter.device_payload()["product_type"] == "HWE-P1"
+    assert "timestamp" in meter.measurement_payload()
+    assert meter.system_payload()["status_led_brightness_pct"] == 80
+    with pytest.raises(ValueError, match="SDM630-wifi"):
+        meter.set_profile("kwh3")
+
+
+def test_kwh_meter_certificate_name(tmp_path: Path) -> None:
+    name = hostname("5c2faf000001", "energymeter")
+    assert name == "appliance/energymeter/5c2faf000001"
+    server = MeterServer(Meter("5c2faf000001", "kwh3"), tmp_path / "ca", tmp_path)
+    server.build_contexts()
+    subject = ssl._ssl._test_decode_cert(str(tmp_path / "device.pem"))["subject"]
+    assert (("commonName", "appliance/energymeter/5c2faf000001"),) in subject
+
+
+async def test_integration_parses_the_kwh_stream(caplog) -> None:
+    """Every captured field passes validation; extra current fields are ignored."""
+    from test_websocket import client, frame
+
+    meter = Meter("5c2faf000001", "kwh3")
+    meter.steady = False
+    frames = [
+        frame("authorization_requested", {"api_version": "2.0.0"}),
+        frame("authorized"),
+        frame("device", meter.device_payload()),
+        frame("system", meter.system_payload()),
+        frame("measurement", meter.measurement_payload()),
+        frame("measurement", meter.measurement_payload()),
+    ]
+    api, _, _ = client(frames, serial=meter.serial)
+    with caplog.at_level("WARNING"):
+        first = await api.connect()
+        second = await api.receive()
+    assert first.device.product_type == "SDM630-wifi"
+    assert second.measurement.voltage_l3_v == 225.772
+    assert second.measurement.reactive_power_l1_var == -75.285
+    assert second.measurement.energy_import_kwh == 0
+    assert second.measurement.tariff is None
+    assert second.measurement.timestamp is None
+    assert "Ignoring" not in caplog.text
+    await api.close()

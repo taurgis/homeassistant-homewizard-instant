@@ -1,4 +1,4 @@
-"""Run an emulated HomeWizard P1 meter."""
+"""Run an emulated HomeWizard P1 or kWh meter."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from .server import MeterServer
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Emulated HomeWizard P1 meter (API v2)")
+    parser = argparse.ArgumentParser(description="Emulated HomeWizard P1 or kWh meter (API v2)")
     parser.add_argument("--serial", default=os.environ.get("METER_SERIAL", "aabbccddeeff"))
     parser.add_argument("--profile", default=os.environ.get("METER_PROFILE", "3phase"))
     parser.add_argument("--host", default=os.environ.get("BIND_HOST", "127.0.0.1"))
