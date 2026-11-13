@@ -1,13 +1,13 @@
 # Agent Protocol: HomeWizard Instant (Home Assistant Custom Integration)
 
-This repository contains a Home Assistant custom integration for **HomeWizard P1 meters**.
+This repository contains a Home Assistant custom integration for **HomeWizard P1 meters** and **DIN-rail kWh meters**.
 
 The project’s primary differentiator is **real-time push updates**: every measurement the meter sends over the authenticated **API v2 WebSocket** reaches Home Assistant, without a polling interval.
 
 ## What this integration is (and is not)
 
 - **Domain**: `homewizard_instant` (intentionally different from the official `homewizard` integration).
-- **Scope**: Only **P1 meters** are supported.
+- **Scope**: **P1 meters** and **DIN-rail kWh meters** (`SUPPORTED_MODELS` in `const.py`). Tariffs, DSMR fields and external meters only exist on P1 meters; gate them on the field, not the model.
 - **Transport**: HomeWizard local API v2. One TLS-verified `wss://<host>/api/ws` connection per entry (`websocket.py`); REST through `HomeWizardEnergyV2` only for pairing, identity checks and token revocation.
 - **Pattern**: `local_push` using a single `DataUpdateCoordinator` fed by a background reader task.
 

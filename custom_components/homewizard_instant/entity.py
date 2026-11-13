@@ -16,7 +16,7 @@ type Topic = Literal["measurement", "system"]
 
 
 def p1_device_info(device: Device) -> DeviceInfo:
-    """Describe the P1 meter; sensors and the external-meter parent share it."""
+    """Describe the meter; sensors and the external-meter parent share it."""
     info = DeviceInfo(
         manufacturer="HomeWizard",
         sw_version=device.firmware_version,
