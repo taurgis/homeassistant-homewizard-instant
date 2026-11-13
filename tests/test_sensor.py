@@ -443,3 +443,75 @@ async def test_reports_follow_their_own_topic(
     coordinator.last_update_success = False
     assert update() == [3, 3, 3]
     assert update() == [3, 3, 3]
+
+
+async def test_kwh_meter_sensors(hass):
+    """A three-phase kWh meter exposes phase sensors and no P1-only sensors."""
+    from homewizard_energy.models import CombinedModels, Device, Measurement, System
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    from custom_components.homewizard_instant.const import DOMAIN
+
+    entry = MockConfigEntry(
+        domain=DOMAIN, unique_id=f"{DOMAIN}_HWE-KWH3_aabbccddeeff", title="kWh"
+    )
+    entry.add_to_hass(hass)
+    coordinator = HWEnergyDeviceUpdateCoordinator(hass, entry, api=AsyncMock())
+    coordinator.data = CombinedModels(
+        device=Device.from_dict(
+            {
+                "product_type": "HWE-KWH3",
+                "product_name": "kWh meter",
+                "serial": "aabbccddeeff",
+                "api_version": "2.0.0",
+                "firmware_version": "4.19",
+            }
+        ),
+        measurement=Measurement.from_dict(
+            {
+                "energy_import_kwh": 12.5,
+                "energy_export_kwh": 1.5,
+                "power_w": 600,
+                "power_l1_w": 100,
+                "power_l2_w": 200,
+                "power_l3_w": 300,
+                "voltage_l1_v": 230.1,
+                "voltage_l2_v": 230.2,
+                "voltage_l3_v": 230.3,
+                "current_a": 2.6,
+                "current_l1_a": 0.5,
+                "current_l2_a": 0.9,
+                "current_l3_a": 1.2,
+                "apparent_power_va": 650,
+                "reactive_power_var": 30,
+                "power_factor_l1": 0.9,
+                "power_factor_l2": 0.95,
+                "power_factor_l3": 0.99,
+                "frequency_hz": 50,
+            }
+        ),
+        system=System.from_dict({"wifi_rssi_db": -60, "uptime_s": 10}),
+        state=None,
+    )
+    entry.runtime_data = coordinator
+    added = []
+    await async_setup_entry(hass, entry, added.extend)
+
+    keys = {entity.entity_description.key for entity in added}
+    assert {
+        "total_power_import_kwh",
+        "total_power_export_kwh",
+        "active_power_l3_w",
+        "active_voltage_l2_v",
+        "active_current_l1_a",
+        "active_power_factor_l3",
+        "active_frequency_hz",
+    } <= keys
+    assert not keys & {
+        "active_tariff",
+        "smr_version",
+        "total_power_import_t1_kwh",
+        "active_voltage_v",
+        "monthly_power_peak_w",
+    }
+    assert not any(isinstance(e, HomeWizardExternalSensorEntity) for e in added)

@@ -12,7 +12,7 @@ from typing import Any
 
 from aiohttp import WSMsgType, web
 
-from .certs import ensure_ca, issue_cert
+from .certs import ensure_ca, hostname, issue_cert
 from .meter import FAULT_NAMES, Meter
 
 LOGGER = logging.getLogger("mock_device")
@@ -37,12 +37,23 @@ class MeterServer:
 
     def build_contexts(self) -> None:
         ca_cert, ca_key = ensure_ca(self.ca_dir)
+        identity = hostname(self.meter.serial, self.meter.device.certificate_type)
         cert, key = issue_cert(
-            ca_cert, ca_key, self.meter.serial, self.work_dir, name="device"
+            ca_cert,
+            ca_key,
+            self.meter.serial,
+            self.work_dir,
+            name="device",
+            common_name=identity,
         )
         bad_ca, bad_key = ensure_ca(self.work_dir / "untrusted-ca")
         bad_cert, bad_key_path = issue_cert(
-            bad_ca, bad_key, self.meter.serial, self.work_dir, name="untrusted"
+            bad_ca,
+            bad_key,
+            self.meter.serial,
+            self.work_dir,
+            name="untrusted",
+            common_name=identity,
         )
         self._trusted = _server_context(cert, key)
         self._untrusted = _server_context(bad_cert, bad_key_path)
@@ -58,7 +69,8 @@ class MeterServer:
         await web.TCPSite(self._control_runner, host, control_port).start()
         await self._start_https()
         LOGGER.info(
-            "P1 %s https://%s:%s profile=%s control=:%s",
+            "%s %s https://%s:%s profile=%s control=:%s",
+            self.meter.device.product_type,
             self.meter.serial,
             host,
             https_port,

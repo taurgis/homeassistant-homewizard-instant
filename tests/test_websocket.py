@@ -479,3 +479,38 @@ async def test_wedged_socket_raises_a_connection_error():
     with pytest.raises(RequestError, match="No HomeWizard WebSocket frame for 90 s"):
         await api.receive()
     await api.close()
+
+
+async def test_kwh_meter_snapshot():
+    """kWh meters connect by serial and parse per-phase fields."""
+    device = {**DEVICE, "product_type": "HWE-KWH3", "product_name": "kWh meter"}
+    api, _, _ = client(
+        [
+            frame("authorization_requested", {"api_version": "2.0.0"}),
+            frame("authorized"),
+            frame("device", device),
+            frame("system", {"wifi_rssi_db": -60}),
+            frame(
+                "measurement",
+                {
+                    "energy_import_kwh": 12.5,
+                    "energy_export_kwh": 1.5,
+                    "power_w": 600,
+                    "power_l1_w": 100,
+                    "power_l2_w": 200,
+                    "power_l3_w": 300,
+                    "voltage_l1_v": 230.1,
+                    "current_l2_a": 0.9,
+                    "power_factor_l3": 0.95,
+                    "frequency_hz": 50,
+                },
+            ),
+        ]
+    )
+    data = await api.connect()
+    assert data.device.model_name == "kWh Meter 3-phase"
+    assert data.measurement.power_l3_w == 300
+    assert data.measurement.voltage_l1_v == 230.1
+    assert data.measurement.power_factor_l3 == 0.95
+    assert data.measurement.tariff is None
+    await api.close()
