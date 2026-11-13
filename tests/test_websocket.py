@@ -203,6 +203,11 @@ async def test_unusable_frames_keep_the_last_snapshot(caplog):
         ({"power_w": None, "energy_import_kwh": 5}, {"power_w": None}),
         ({"power_w": "high", "energy_import_kwh": 5}, {"power_w": None}),
         ({"power_w": True, "energy_import_kwh": 5}, {"power_w": None}),
+        ({"power_w": float("nan"), "energy_import_kwh": 5}, {"power_w": None}),
+        (
+            {"voltage_l1_v": float("inf"), "energy_import_kwh": 5},
+            {"voltage_l1_v": None},
+        ),
         (
             {"power_w": 10**12, "frequency_hz": 5000, "energy_import_kwh": 5},
             {"power_w": None, "frequency_hz": None},
@@ -263,6 +268,8 @@ async def test_bad_external_meters_are_dropped():
                     1,
                     {**gas, "value": None},
                     {**gas, "value": 10**15},
+                    {**gas, "value": float("nan")},
+                    {**gas, "value": float("inf")},
                     {**gas, "timestamp": None},
                     {**gas, "timestamp": "garbage"},
                     {**gas, "unit": None},
