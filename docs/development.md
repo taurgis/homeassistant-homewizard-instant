@@ -1,21 +1,22 @@
 # Development
 
-This page is for running the integration against a real Home Assistant and an emulated P1 meter. Unit tests stay in `tests/` and do not need Docker.
+This page is for running the integration against a real Home Assistant and emulated P1 and kWh meters. Unit tests stay in `tests/` and do not need Docker.
 
 ## What the lab contains
 
-`.devcontainer/docker-compose.yml` starts four containers:
+`.devcontainer/docker-compose.yml` starts five containers:
 
 | Service | Address | Role |
 | --- | --- | --- |
 | `homeassistant` | http://127.0.0.1:8123 | Home Assistant. Default image is `2026.10.4` (current stable, Python 3.14). |
 | `meter-3phase` | `172.30.28.10` | API v2 P1 meter, serial `aabbccddeeff`, 3-phase import with gas and water. |
 | `meter-1phase` | `172.30.28.11` | API v2 P1 meter, serial `112233445566`, 1-phase import with gas. |
+| `meter-kwh3` | `172.30.28.12` | API v2 3-phase kWh meter (SDM630-wifi), serial `5c2faf000001`, replaying a frame captured from a physical meter at night. |
 | `ca` | (exits) | Writes a development CA into a shared volume. |
 
 The integration is bind-mounted from `custom_components/homewizard_instant`. Home Assistant config is created in `.devcontainer/ha_config` on first start (gitignored).
 
-The meters speak HTTPS with a certificate shaped like a real P1 meter: common name `appliance/p1dongle/<serial>` and no subjectAltName (HomeWizard API documentation, and a P1 dongle certificate reported with an empty subjectAltName list). The integration checks that chain against the HomeWizard CA and then compares the serial from `/api`. It does not pin the TLS hostname. `python-homewizard-energy` only trusts HomeWizard's appliance CA, and that private key is not public, so the lab CA is loaded only when `HOMEWIZARD_DEV_CA` points at a PEM file that contains a real certificate. Loading it logs a warning, because every HomeWizard client in that process then trusts the lab CA. Leave the variable unset on a normal install.
+The meters speak HTTPS with a certificate shaped like a real P1 meter: common name `appliance/p1dongle/<serial>` (`appliance/energymeter/<serial>` for kWh meters) and no subjectAltName (HomeWizard API documentation, and a P1 dongle certificate reported with an empty subjectAltName list). The integration checks that chain against the HomeWizard CA and then compares the serial from `/api`. It does not pin the TLS hostname. `python-homewizard-energy` only trusts HomeWizard's appliance CA, and that private key is not public, so the lab CA is loaded only when `HOMEWIZARD_DEV_CA` points at a PEM file that contains a real certificate. Loading it logs a warning, because every HomeWizard client in that process then trusts the lab CA. Leave the variable unset on a normal install.
 
 The WebSocket matches the v2 handshake. The meter sends `authorization_requested`, and the client must answer with `{"type":"authorization","data":"<token>"}` within 40 seconds. Measurement and system frames are pushed only after a `subscribe` for that topic. A client that has not subscribed stays quiet. Like real firmware, only measurements stream; a client reads fresh system fields (`wifi_rssi_db`, `uptime_s`) by sending `{"type":"system"}`.
 
@@ -34,11 +35,12 @@ Home Assistant takes a minute the first time while it installs `python-homewizar
 docker compose logs -f homeassistant
 ```
 
-Open http://127.0.0.1:8123 and create the owner account. Add the integration with IP `172.30.28.11` (1-phase) or `172.30.28.10` (3-phase). When it asks for the button, press it from the host and submit within 30 seconds:
+Open http://127.0.0.1:8123 and create the owner account. Add the integration with IP `172.30.28.11` (1-phase), `172.30.28.10` (3-phase) or `172.30.28.12` (kWh meter). When it asks for the button, press it from the host and submit within 30 seconds:
 
 ```bash
 curl -s -X POST http://127.0.0.1:8082/button   # 1-phase meter
 curl -s -X POST http://127.0.0.1:8081/button   # 3-phase meter
+curl -s -X POST http://127.0.0.1:8083/button   # kWh meter
 ```
 
 The documented minimum is Home Assistant 2026.8 on Python 3.14. Use that image with:
@@ -51,7 +53,7 @@ Stop the lab with `docker compose down`. Add `-v` to drop the CA volume and the 
 
 ## Meter control
 
-Each meter has a plain HTTP control port. From the host that is `8081` for the 3-phase meter and `8082` for the 1-phase meter. Inside the lab network it is port `8080` on the meter IP.
+Each meter has a plain HTTP control port. From the host that is `8081` for the 3-phase meter, `8082` for the 1-phase meter and `8083` for the kWh meter. Inside the lab network it is port `8080` on the meter IP.
 
 ```bash
 curl -s http://127.0.0.1:8081/state
@@ -60,7 +62,7 @@ curl -s -X POST http://127.0.0.1:8081/steady -H 'Content-Type: application/json'
 curl -s -X POST http://127.0.0.1:8081/clear
 ```
 
-Profiles are `3phase`, `1phase`, `export` (3-phase feed-in, negative L1 current) and `export_1phase`. `steady` repeats one snapshot so values can be compared exactly. With steady off, power wobbles and import or export energy creeps up.
+P1 profiles are `3phase`, `1phase`, `export` (3-phase feed-in, negative L1 current) and `export_1phase`. kWh profiles are `kwh3` (an SDM630-wifi frame captured at night: 0 W, only reactive standby current, no timestamp, tariff or DSMR fields), `kwh3_solar` (the same meter exporting 2.4 kW) and `kwh1` (an HWE-KWH1 with the documented 1-phase fields). A meter only switches between profiles of its own product type, so start the lab's kWh meter for kWh profiles. `steady` repeats one snapshot so values can be compared exactly. With steady off, power wobbles and import or export energy creeps up.
 
 Faults, posted as `{"name":"<fault>"}`:
 

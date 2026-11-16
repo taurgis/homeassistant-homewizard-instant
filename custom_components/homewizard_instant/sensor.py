@@ -38,7 +38,7 @@ from homewizard_energy.models import CombinedModels, ExternalDevice, System
 
 from .const import DOMAIN
 from .coordinator import HomeWizardConfigEntry, HWEnergyDeviceUpdateCoordinator
-from .entity import HomeWizardEntity, Topic, p1_device_info
+from .entity import HomeWizardEntity, Topic, meter_device_info
 
 SENSOR_DEVICE_CLASS_UNITS = cast(
     "dict[SensorDeviceClass, set[str]]",
@@ -690,12 +690,13 @@ async def async_setup_entry(
 ) -> None:
     """Initialize sensors and add those whose data appears later."""
     coordinator = entry.runtime_data
-    p1 = coordinator.data.device
+    meter = coordinator.data.device
     parent = None
-    if p1.serial is not None:
-        # External meters link to the P1 by registry id, so it must exist first.
+    if meter.serial is not None:
+        # External meters (behind a P1 meter) link to the meter by registry id,
+        # so it must exist first.
         parent = dr.async_get(hass).async_get_or_create(
-            config_entry_id=entry.entry_id, **p1_device_info(p1)
+            config_entry_id=entry.entry_id, **meter_device_info(meter)
         )
     parent_id = parent.id if parent is not None else None
     known_sensors: set[str] = set()

@@ -15,8 +15,8 @@ from .coordinator import HWEnergyDeviceUpdateCoordinator
 type Topic = Literal["measurement", "system"]
 
 
-def p1_device_info(device: Device) -> DeviceInfo:
-    """Describe the P1 meter; sensors and the external-meter parent share it."""
+def meter_device_info(device: Device) -> DeviceInfo:
+    """Describe the meter; sensors and the external-meter parent share it."""
     info = DeviceInfo(
         manufacturer="HomeWizard",
         sw_version=device.firmware_version,
@@ -41,7 +41,7 @@ class HomeWizardEntity(CoordinatorEntity[HWEnergyDeviceUpdateCoordinator]):
     def __init__(self, coordinator: HWEnergyDeviceUpdateCoordinator) -> None:
         """Initialize the HomeWizard entity."""
         super().__init__(coordinator)
-        self._attr_device_info = p1_device_info(coordinator.data.device)
+        self._attr_device_info = meter_device_info(coordinator.data.device)
         self._reported: tuple[object, bool] | None = None
 
     @callback

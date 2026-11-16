@@ -118,8 +118,9 @@ _INVALID_LIMIT = 30
 # cadence of older meters.
 _HEARTBEAT = 15.0
 # A meter that still answers pings but sends nothing, not even the system reply
-# requested every SYSTEM_REFRESH_INTERVAL, is wedged. A silent P1 port alone
-# never reaches this: the system reply keeps arriving.
+# requested every SYSTEM_REFRESH_INTERVAL, is wedged. A meter whose readings
+# stop, such as a P1 meter with an unplugged cable, never reaches this: the
+# system reply keeps arriving.
 _IDLE_TIMEOUT = SYSTEM_REFRESH_INTERVAL.total_seconds() + 30
 
 
@@ -184,8 +185,9 @@ def trust_development_ca() -> None:
 def create_ssl_context() -> ssl.SSLContext:
     """Trust the HomeWizard appliance CA and leave the hostname unchecked.
 
-    Identity is the serial carried by the device topic. Real P1 certificates
-    use a common name of ``appliance/p1dongle/<serial>`` with no
+    Identity is the serial carried by the device topic. Real certificates use
+    a common name of ``appliance/p1dongle/<serial>`` on P1 meters and
+    ``appliance/energymeter/<serial>`` on kWh meters, with no
     subjectAltName, and some meters present a name that does not verify as
     that hostname. The official integration checks the CA chain, then the
     serial from the device.

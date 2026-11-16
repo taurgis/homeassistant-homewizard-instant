@@ -35,6 +35,7 @@ DATA = {
     "product_type": "HWE-P1",
     "serial": DEVICE.serial,
 }
+KWH_MODELS = ["HWE-KWH1", "HWE-KWH3", "SDM230-wifi", "SDM630-wifi"]
 
 
 @pytest.fixture(autouse=True)
@@ -130,16 +131,20 @@ async def start_pairing(hass):
     return result
 
 
-async def test_pairing(hass):
+@pytest.mark.parametrize("product_type", ["HWE-P1", *KWH_MODELS])
+async def test_pairing(hass, product_type):
+    device = SimpleNamespace(
+        product_type=product_type, product_name="Meter", serial=DEVICE.serial
+    )
     result = await start_pairing(hass)
     with (
         patch(PREFIX + "async_request_token", return_value="secret"),
-        patch(PREFIX + "async_try_connect", return_value=DEVICE),
+        patch(PREFIX + "async_try_connect", return_value=device),
     ):
         result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
     assert result["type"] == FlowResultType.CREATE_ENTRY
-    assert result["data"] == DATA
-    assert result["result"].unique_id == f"{DOMAIN}_HWE-P1_{DEVICE.serial}"
+    assert result["data"] == {**DATA, "product_type": product_type}
+    assert result["result"].unique_id == f"{DOMAIN}_{product_type}_{DEVICE.serial}"
 
 
 @pytest.mark.parametrize(
@@ -286,10 +291,13 @@ async def test_unsupported(hass):
     assert revoke.await_args.args[2] == "secret"
 
 
+@pytest.mark.parametrize("product_type", ["HWE-P1", "HWE-KWH3"])
 @pytest.mark.parametrize("known", [False, True])
-async def test_dhcp(hass, known):
+async def test_dhcp(hass, known, product_type):
     entry = MockConfigEntry(
-        domain=DOMAIN, data=DATA, unique_id=f"{DOMAIN}_HWE-P1_{DEVICE.serial}"
+        domain=DOMAIN,
+        data={**DATA, "product_type": product_type},
+        unique_id=f"{DOMAIN}_{product_type}_{DEVICE.serial}",
     )
     if known:
         entry.add_to_hass(hass)
@@ -304,12 +312,13 @@ async def test_dhcp(hass, known):
         assert entry.data["token"] == "secret"
 
 
-async def test_zeroconf(hass):
+@pytest.mark.parametrize("product_type", ["HWE-P1", *KWH_MODELS])
+async def test_zeroconf(hass, product_type):
     discovery = SimpleNamespace(
         host="1.2.3.4",
         properties={
-            "product_type": "HWE-P1",
-            "product_name": "P1 Meter",
+            "product_type": product_type,
+            "product_name": "Meter",
             "serial": DEVICE.serial,
         },
     )
@@ -597,3 +606,32 @@ async def test_zeroconf_rejects_a_different_meter(hass):
         result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
     assert result["reason"] == "wrong_device"
     revoke.assert_awaited()
+
+
+async def test_zeroconf_unsupported(hass):
+    discovery = SimpleNamespace(
+        host="1.2.3.4",
+        properties={
+            "product_type": "HWE-SKT",
+            "product_name": "Energy Socket",
+            "serial": DEVICE.serial,
+        },
+    )
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "zeroconf"}, data=discovery
+    )
+    assert result["reason"] == "device_not_supported"
+
+
+async def test_dhcp_ignores_unsupported_entry(hass):
+    entry = MockConfigEntry(
+        domain=DOMAIN, data=DATA, unique_id=f"{DOMAIN}_HWE-SKT_{DEVICE.serial}"
+    )
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": "dhcp"},
+        data=SimpleNamespace(ip="2.3.4.5", macaddress="AA:BB:CC:DD:EE:FF"),
+    )
+    assert result["reason"] == "unknown_device"
+    assert entry.data["ip_address"] == "1.2.3.4"

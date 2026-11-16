@@ -55,9 +55,9 @@ def _openssl(args: list[str]) -> None:
         raise RuntimeError(detail.strip())
 
 
-def hostname(serial: str) -> str:
-    """Return the TLS name documented for a P1 meter."""
-    return f"appliance/p1dongle/{serial}"
+def hostname(serial: str, certificate_type: str = "p1dongle") -> str:
+    """Return the documented TLS name; kWh meters use ``energymeter``."""
+    return f"appliance/{certificate_type}/{serial}"
 
 
 def ensure_ca(directory: Path) -> tuple[Path, Path]:

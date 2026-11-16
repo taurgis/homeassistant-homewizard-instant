@@ -1,4 +1,4 @@
-"""State, pairing and fault injection for one emulated P1 meter."""
+"""State, pairing and fault injection for one emulated P1 or kWh meter."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .certs import hostname
-from .profiles import PROFILES
+from .profiles import PROFILE_DEVICES, PROFILES
 
 PAIRING_WINDOW_SECONDS = 30
 AUTH_TIMEOUT_SECONDS = 40
@@ -61,7 +61,7 @@ class Faults:
 
 
 class Meter:
-    """One P1 meter: button pairing, snapshots and fault payloads."""
+    """One meter: button pairing, snapshots and fault payloads."""
 
     def __init__(
         self,
@@ -75,6 +75,7 @@ class Meter:
         self.serial = serial.lower()
         self.push_interval = push_interval
         self.profile_name = profile
+        self.device = PROFILE_DEVICES[profile]
         self.template = PROFILES[profile]()
         self.energy = {
             key: value
@@ -173,6 +174,12 @@ class Meter:
     def set_profile(self, name: str) -> None:
         if name not in PROFILES:
             raise ValueError(f"Unknown profile {name}")
+        if PROFILE_DEVICES[name] != self.device:
+            # A real meter never changes product type; start another meter.
+            raise ValueError(
+                f"Profile {name} is a {PROFILE_DEVICES[name].product_type}, "
+                f"not a {self.device.product_type}"
+            )
         self.profile_name = name
         self.template = PROFILES[name]()
         for key, value in self.template.items():
@@ -184,11 +191,11 @@ class Meter:
     def device_payload(self) -> dict[str, Any]:
         serial = IDENTITY_SERIAL if self.faults.identity_change else self.serial
         return {
-            "product_type": "HWE-P1",
-            "product_name": "P1 Meter",
+            "product_type": self.device.product_type,
+            "product_name": self.device.product_name,
             "serial": serial,
-            "firmware_version": "6.0204",
-            "api_version": "2.0.0",
+            "firmware_version": self.device.firmware_version,
+            "api_version": self.device.api_version,
         }
 
     def system_payload(self) -> dict[str, Any]:
@@ -204,6 +211,9 @@ class Meter:
             "status_led_brightness_pct": 80,
             "api_v1_enabled": False,
         }
+        if not self.device.p1:
+            # The captured SDM630-wifi reports no LED brightness.
+            del payload["status_led_brightness_pct"]
         self.last_system = payload
         return payload
 
@@ -257,6 +267,9 @@ class Meter:
         payload[key] = updated
 
     def _stamp(self, payload: dict[str, Any]) -> None:
+        if not self.device.p1:
+            # kWh meters have no smart-meter clock to report.
+            return
         stamp = self.frozen_timestamp or time.strftime(
             "%Y-%m-%dT%H:%M:%S", time.localtime()
         )
@@ -288,7 +301,10 @@ class Meter:
         if self.faults.missing_fields:
             return {
                 "type": "device",
-                "data": {"product_type": "HWE-P1", "product_name": "P1 Meter"},
+                "data": {
+                    "product_type": self.device.product_type,
+                    "product_name": self.device.product_name,
+                },
             }
         if self.faults.null_fields:
             return {

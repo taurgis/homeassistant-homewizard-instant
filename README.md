@@ -1,6 +1,6 @@
 # HomeWizard Instant (Home Assistant custom integration)
 
-This is a custom integration for **HomeWizard P1 meters** that receives real-time measurement updates over the **HomeWizard API v2 WebSocket**.
+This is a custom integration for **HomeWizard P1 meters** and **DIN-rail kWh meters** that receives real-time measurement updates over the **HomeWizard API v2 WebSocket**.
 
 Home Assistant’s official HomeWizard integration is documented here:
 - https://www.home-assistant.io/integrations/homewizard/
@@ -29,16 +29,16 @@ If you add this repository to HACS as a custom repository (category: **Integrati
 
 This integration is configured via the UI. The only required parameter is:
 
-- **IP address**: the local IP address of your HomeWizard P1 meter.
+- **IP address**: the local IP address of your HomeWizard P1 meter or kWh meter.
 
-After entering the IP address, press the device button when prompted and select Submit within 30 seconds. If the pairing window expires, submit to reopen it, then press the button and submit again.
+After entering the IP address, press the device button when prompted and select Submit within 30 seconds. On a kWh meter, hold the Wi-Fi pair button for 1 to 3 seconds. If the pairing window expires, submit to reopen it, then press the button and submit again.
 
 The integration stores a v2 token under a separate local device user and keeps domain-prefixed unique IDs to avoid conflicts with the official integration.
 
 ### Installation parameters
 
 - **Home Assistant 2026.8 or newer** (the first release that ships `python-homewizard-energy` 10.2.0).
-- P1 meter firmware supporting **API v2 and `/api/ws`**. The API v1 local-API toggle is not used.
+- Meter firmware supporting **API v2 and `/api/ws`**. The API v1 local-API toggle is not used.
 - The device must be reachable on your local network.
 
 ## Data updates
@@ -66,7 +66,8 @@ Existing entries prompt for one-time v2 pairing after updating and restarting. C
 
 ## Supported devices
 
-- HomeWizard **P1 meters** only.
+- HomeWizard **P1 meters** (HWE-P1).
+- HomeWizard **DIN-rail kWh meters**: HWE-KWH1 and SDM230-wifi (1-phase), HWE-KWH3 and SDM630-wifi (3-phase).
 
 ## Supported functions
 
@@ -82,7 +83,7 @@ Existing entries prompt for one-time v2 pairing after updating and restarting. C
 
 ## Troubleshooting
 
-- **Pairing fails**: Reopen the pairing window, press the device button, then submit within 30 seconds.
+- **Pairing fails**: Reopen the pairing window, press the device button, then submit within 30 seconds. A kWh meter only accepts a 1 to 3 second press of its Wi-Fi pair button.
 - **Token revoked**: Complete the reauthentication prompt.
 - **Device unreachable**: Confirm the IP address and ensure the device is online.
 - **Discovery not found**: Add the integration manually and provide the IP address.
@@ -93,16 +94,16 @@ Existing entries prompt for one-time v2 pairing after updating and restarting. C
 - HomeWizard only pushes some system settings in real time, so the integration reads Wi-Fi signal and uptime once a minute over the open WebSocket.
 - A meter that is already silent when Home Assistant starts shows its last reading for up to 60 seconds before its sensors become unavailable.
 - An energy total of exactly 0 kWh is shown as unknown, like the official HomeWizard integration does, because Home Assistant would otherwise record it as a meter reset.
-- Only P1 meters are supported; other HomeWizard devices are not supported.
+- Only P1 meters and kWh meters are supported; other HomeWizard devices (Energy Socket, Watermeter, Plug-In Battery) are not.
 - This integration does not register services or actions.
 
 ## Removal
 
-1. Remove the integration from **Settings → Devices & services**. Home Assistant also deletes its local user from the P1 meter when the meter is reachable; otherwise remove it in the HomeWizard Energy app.
+1. Remove the integration from **Settings → Devices & services**. Home Assistant also deletes its local user from the meter when it is reachable; otherwise remove it in the HomeWizard Energy app.
 2. If installed manually, delete `custom_components/homewizard_instant`.
 3. If installed via HACS, remove the repository from HACS and restart Home Assistant.
 
 ## Notes
 
 - Protocol reference: [HomeWizard API v2 WebSocket documentation](https://api-documentation.homewizard.com/docs/v2/websocket/).
-- Only **P1 meters** are supported by this integration.
+- Only **P1 meters** and **kWh meters** are supported by this integration.
