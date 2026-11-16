@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import ssl
 import time
@@ -200,6 +201,9 @@ def create_ssl_context() -> ssl.SSLContext:
 def _number_problem(key: str, value: Any, bounds: tuple[float, float]) -> str | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return f"{key} is {type(value).__name__}, expected a number"
+    # JSON decoding accepts NaN and Infinity; NaN fails every comparison below.
+    if isinstance(value, float) and not math.isfinite(value):
+        return f"{key}={value} is not finite"
     low, high = bounds
     if value < low or value > high:
         return f"{key}={value} outside {low}..{high}"
@@ -212,6 +216,8 @@ def _external_problem(item: Any) -> str | None:
     reading = item.get("value")
     if isinstance(reading, bool) or not isinstance(reading, (int, float)):
         return f"external value {reading!r} is not a number"
+    if isinstance(reading, float) and not math.isfinite(reading):
+        return f"external value {reading} is not finite"
     if reading < 0 or reading > 1_000_000_000_000:
         return f"external value {reading} is out of range"
     for key in ("unique_id", "type", "unit"):
