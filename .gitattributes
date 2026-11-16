@@ -1,0 +1,3 @@
+# Shell scripts run inside Linux containers. With core.autocrlf on Windows they
+# would be checked out with CRLF, which breaks "set -eu" and the shebang.
+*.sh text eol=lf
