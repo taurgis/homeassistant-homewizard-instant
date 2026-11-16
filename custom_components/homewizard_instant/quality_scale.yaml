@@ -66,8 +66,8 @@ rules:
   stale-devices:
     status: done
     comment: >-
-      External meters the P1 meter no longer reports can be deleted from the
-      device page; the P1 meter itself and reported meters cannot.
+      External meters a P1 meter no longer reports can be deleted from the
+      device page; the P1 or kWh meter itself and reported meters cannot.
 
   # Platinum
   async-dependency: done
