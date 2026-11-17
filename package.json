@@ -3,6 +3,7 @@
   "private": true,
   "version": "1.0.4",
   "description": "Release tooling for the HomeWizard Instant Home Assistant integration",
+  "license": "MIT",
   "scripts": {
     "changeset": "changeset",
     "changeset:version": "changeset version && node scripts/sync-release-version.mjs",
